@@ -112,9 +112,23 @@ jobs:
       - name: Download OpenWrt ImageBuilder
         run: |
           VER="${{ github.event.inputs.openwrt_version || '24.10.2' }}"
-          URL="https://downloads.openwrt.org/releases/${VER}/targets/${TARGET}/openwrt-imagebuilder-${VER}-ramips-mt7621.Linux-x86_64.tar.zst"
-          echo "Downloading: $URL"
-          curl -fL --retry 3 -o imagebuilder.tar.zst "$URL"
+          FILE="openwrt-imagebuilder-${VER}-ramips-mt7621.Linux-x86_64.tar.zst"
+          fetched=0
+          # CDN 连接停滞时有界退出，改用 OpenWrt 官方镜像；下载后必须核对 SHA-256。
+          for HOST in https://downloads.openwrt.org https://mirror-03.infra.openwrt.org; do
+            BASE="$HOST/releases/${VER}/targets/${TARGET}"
+            echo "Downloading: $BASE/$FILE"
+            if curl -4 -fL --connect-timeout 20 --max-time 240 --speed-limit 32768 --speed-time 30 \
+                -o imagebuilder.tar.zst "$BASE/$FILE" \
+              && curl -4 -fsSL --connect-timeout 20 --max-time 60 -o imagebuilder.sha256sums "$BASE/sha256sums"; then
+              EXPECTED=$(awk -v file="$FILE" '$2 == file || $2 == "*" file { print $1 }' imagebuilder.sha256sums)
+              if [ -n "$EXPECTED" ] && printf '%s  imagebuilder.tar.zst\n' "$EXPECTED" | sha256sum -c -; then
+                fetched=1
+                break
+              fi
+            fi
+          done
+          [ "$fetched" = 1 ] || { echo '无法下载并校验 OpenWrt ImageBuilder' >&2; exit 1; }
           tar --zstd -xf imagebuilder.tar.zst
           mv "openwrt-imagebuilder-${VER}-ramips-mt7621.Linux-x86_64" ib
 
