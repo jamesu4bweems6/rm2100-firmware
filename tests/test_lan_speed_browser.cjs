@@ -31,6 +31,7 @@ async function stopped(page) {
     page.on('request', r => requests.push(r.url()));
     await page.goto(base);
     await page.getByRole('link', { name: '内网测速' }).click();
+    await page.waitForLoadState('domcontentloaded');
     assert.equal(new URL(page.url()).pathname, '/speed.html');
     assert.equal(await page.locator('#speed-router').textContent(), new URL(base).host);
     await page.locator('#speed-duration').selectOption('3');
