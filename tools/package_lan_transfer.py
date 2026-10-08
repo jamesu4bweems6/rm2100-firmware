@@ -18,9 +18,10 @@ FILES = sorted([
     'usr/share/rpcd/acl.d/luci-app-lan-transfer.json',
     'usr/share/ucitrack/lan-transfer.json',
     'www/luci-static/resources/view/lan-transfer.js',
+    'www/luci-static/resources/view/lan-speed.js',
     *(p.relative_to(ROOT / 'files').as_posix() for p in (ROOT / 'files/usr/share/lan-transfer/www').rglob('*') if p.is_file()),
 ])
-EXECUTABLE = {'etc/init.d/lan-transfer', 'usr/share/lan-transfer/stun.uc', 'usr/share/lan-transfer/www/cgi-bin/api'}
+EXECUTABLE = {'etc/init.d/lan-transfer', 'usr/share/lan-transfer/stun.uc', 'usr/share/lan-transfer/www/cgi-bin/api', 'usr/share/lan-transfer/www/cgi-bin/speed'}
 MTIME = 1790000000  # 固定时间戳，保证同样的源文件打出同样的包
 
 INSTALL = r'''#!/bin/sh
@@ -43,7 +44,7 @@ rmdir /usr/share/lan-transfer/cgi-bin 2>/dev/null || true
 	mkdir -p "/$(dirname "$f")"
 	cp "$src/$f" "/$f"
 done
-chmod 0755 /etc/init.d/lan-transfer /usr/share/lan-transfer/stun.uc /usr/share/lan-transfer/www/cgi-bin/api
+chmod 0755 /etc/init.d/lan-transfer /usr/share/lan-transfer/stun.uc /usr/share/lan-transfer/www/cgi-bin/api /usr/share/lan-transfer/www/cgi-bin/speed
 rm -f /tmp/luci-indexcache* /tmp/luci-modulecache/* 2>/dev/null || true
 /etc/init.d/lan-transfer enable
 /etc/init.d/lan-transfer restart

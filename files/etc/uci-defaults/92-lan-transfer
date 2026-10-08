@@ -4,7 +4,7 @@
 # 所以要当场 start 一次：LAN 还没起来时 start_service 直接返回，但接口触发器已注册，
 # LAN 一就绪就会拉起服务。
 [ -f /etc/config/lan-transfer ] || printf "config lan-transfer 'main'\n\toption enabled '1'\n\toption port '8080'\n" > /etc/config/lan-transfer
-chmod 0755 /etc/init.d/lan-transfer /usr/share/lan-transfer/www/cgi-bin/api /usr/share/lan-transfer/stun.uc
+chmod 0755 /etc/init.d/lan-transfer /usr/share/lan-transfer/www/cgi-bin/api /usr/share/lan-transfer/www/cgi-bin/speed /usr/share/lan-transfer/stun.uc
 /etc/init.d/lan-transfer enable
 /etc/init.d/lan-transfer start 2>/dev/null
 rm -f /tmp/luci-indexcache* /tmp/luci-modulecache/* 2>/dev/null

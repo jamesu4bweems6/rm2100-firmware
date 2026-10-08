@@ -10,5 +10,11 @@
 			"acl": [ "luci-app-lan-transfer" ],
 			"uci": { "lan-transfer": true }
 		}
+	},
+	"admin/services/lan-speed": {
+		"title": "内网测速",
+		"order": 91,
+		"action": { "type": "view", "path": "lan-speed" },
+		"depends": { "acl": [ "luci-app-lan-transfer" ], "uci": { "lan-transfer": true } }
 	}
 }

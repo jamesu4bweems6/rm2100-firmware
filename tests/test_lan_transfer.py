@@ -28,6 +28,7 @@ WWW = ROOT / 'files/usr/share/lan-transfer/www'
 STUN = ROOT / 'files/usr/share/lan-transfer/stun.uc'
 INIT = ROOT / 'files/etc/init.d/lan-transfer'
 CGI = WWW / 'cgi-bin/api'
+SPEED = WWW / 'cgi-bin/speed'
 SOURCE = CGI.read_text(encoding='utf-8')
 NATIVE = os.environ.get('UCODE_BIN') or shutil.which('ucode')
 HOST = '127.0.0.1:8765'
@@ -37,12 +38,12 @@ LIMIT = {name: int(value) for name, value in re.findall(r'^const ([A-Z_]+) = (\d
 class Backend:
     """一个隔离的状态目录 + 一份把 ROOT 指向它的 CGI 副本。"""
 
-    def __init__(self):
+    def __init__(self, source=SOURCE):
         self.temp = tempfile.TemporaryDirectory(prefix='lan-transfer-')
         self.root = Path(self.temp.name)
         self.state = self.root / 'state'
         self.script = self.root / 'api.uc'
-        self.script.write_text(SOURCE.replace("'/tmp/lan-transfer'", json.dumps(self.state.as_posix())),
+        self.script.write_text(source.replace("'/tmp/lan-transfer'", json.dumps(self.state.as_posix())),
                                encoding='utf-8', newline='\n')
 
     def command(self):
@@ -622,6 +623,9 @@ def stage(target, port, bind='127.0.0.1'):
     api.write_text(SOURCE.replace("'/tmp/lan-transfer'", json.dumps(state.as_posix()))
                    .replace('#!/usr/bin/ucode', '#!' + (NATIVE or '/usr/bin/ucode'), 1), encoding='utf-8', newline='\n')
     api.chmod(0o755)
+    speed = target / 'cgi-bin/speed'
+    speed.write_text(SPEED.read_text(encoding='utf-8').replace('#!/usr/bin/ucode', '#!' + (NATIVE or '/usr/bin/ucode'), 1), encoding='utf-8', newline='\n')
+    speed.chmod(0o755)
     stun = STUN.read_text(encoding='utf-8').replace("'/tmp/lan-transfer'", json.dumps(state.as_posix()))
     (target.parent / 'stun.uc').write_text(stun, encoding='utf-8', newline='\n')
     print(uhttpd_command(target, port, bind).replace('/usr/sbin/uhttpd', os.environ.get('UHTTPD_BIN', '/usr/sbin/uhttpd'), 1))
@@ -677,6 +681,7 @@ def smoke(base):
 def serve(port):
     """模拟 uhttpd：静态文件 + /cgi-bin/api。只用于本机预览和浏览器测试，产品运行的是路由器上的 uhttpd。"""
     backend = Backend()
+    speed = Backend(SPEED.read_text(encoding='utf-8'))
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
@@ -702,12 +707,12 @@ def serve(port):
 
         def do_POST(self):
             path, _, query = self.path.partition('?')
-            if path != '/cgi-bin/api':
+            if path not in ('/cgi-bin/api', '/cgi-bin/speed'):
                 self.send_error(404)
                 return
             length = self.headers.get('Content-Length')
             body = self.rfile.read(int(length)) if length else b''
-            status, headers, payload = backend.run(
+            status, headers, payload = (speed if path == '/cgi-bin/speed' else backend).run(
                 body, query=query, method=self.command, ctype=self.headers.get('Content-Type', ''),
                 CONTENT_LENGTH=length, HTTP_HOST=self.headers.get('Host'), HTTP_ORIGIN=self.headers.get('Origin'),
                 SERVER_PORT=str(port), REMOTE_ADDR=self.client_address[0])
@@ -730,6 +735,7 @@ def serve(port):
     finally:
         server.server_close()
         backend.close()
+        speed.close()
 
 
 if __name__ == '__main__':

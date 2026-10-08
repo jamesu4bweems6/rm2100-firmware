@@ -14,7 +14,7 @@ on:
       fw_version:
         description: "Firmware version stamp (written to /etc/campus-fix-version and artifact name)"
         required: false
-        default: "2.11.1"
+        default: "2.12.0"
 
 env:
   PROFILE: xiaomi_redmi-router-ac2100
@@ -75,6 +75,7 @@ jobs:
           python3 tests/test_review_fixes.py
           python3 tests/test_native_ucode.py
           python3 tests/test_lan_transfer.py
+          python3 tests/test_lan_speed.py
 
       - name: Test LAN transfer on real uhttpd, native ucode and STUN in real browsers
         run: |
@@ -96,6 +97,8 @@ jobs:
           python3 tests/test_lan_transfer.py --smoke "http://$LAN_IP:8765"
           NODE_PATH=/tmp/lt-browser/node_modules LAN_TRANSFER_URL="http://$LAN_IP:8765/" LAN_TRANSFER_STUN=1 \
             LAN_TRANSFER_SCREENSHOTS=/tmp/lt-shots node tests/test_lan_transfer_browser.cjs
+          NODE_PATH=/tmp/lt-browser/node_modules LAN_TRANSFER_URL="http://$LAN_IP:8765/" \
+            LAN_TRANSFER_SCREENSHOTS=/tmp/lt-shots node tests/test_lan_speed_browser.cjs
 
       - name: Upload LAN transfer screenshots
         if: always()
@@ -120,9 +123,10 @@ jobs:
           mkdir -p ib/files
           cp -r files/* ib/files/
           chmod 0755 ib/files/etc/init.d/lan-transfer ib/files/etc/uci-defaults/92-lan-transfer \
-            ib/files/usr/share/lan-transfer/stun.uc ib/files/usr/share/lan-transfer/www/cgi-bin/api
+            ib/files/usr/share/lan-transfer/stun.uc ib/files/usr/share/lan-transfer/www/cgi-bin/api \
+            ib/files/usr/share/lan-transfer/www/cgi-bin/speed
           # stamp the firmware version into the overlay
-          FWV="${{ github.event.inputs.fw_version || '2.11.1' }}"
+          FWV="${{ github.event.inputs.fw_version || '2.12.0' }}"
           echo "$FWV" > ib/files/etc/campus-fix-version
           sed -i "s|^echo \".*\" > /etc/campus-fix-version|echo \"$FWV\" > /etc/campus-fix-version|"             ib/files/etc/uci-defaults/99-campus-fix-banner
           echo "firmware version: $FWV"
@@ -192,7 +196,7 @@ jobs:
         run: |
           # campus-fix vX.Y.Z 前缀：下载下来一眼可辨版本（breed 刷机界面
           # 只显示文件名，原名一串 openwrt-24.10.2-ramips-... 容易刷错包）
-          FWV="${{ github.event.inputs.fw_version || '2.11.1' }}"
+          FWV="${{ github.event.inputs.fw_version || '2.12.0' }}"
           cd ib/bin/targets/*/*/
           for f in openwrt-*-xiaomi_redmi-router-ac2100-*.bin \
                    openwrt-*-xiaomi_redmi-router-ac2100.manifest; do
@@ -216,24 +220,31 @@ jobs:
           for f in etc/init.d/lan-transfer etc/config/lan-transfer etc/uci-defaults/92-lan-transfer \
                    usr/share/lan-transfer/stun.uc usr/share/lan-transfer/www/index.html usr/share/lan-transfer/www/app.js \
                    usr/share/lan-transfer/www/qr.js usr/share/lan-transfer/www/style.css usr/share/lan-transfer/www/cgi-bin/api \
+                   usr/share/lan-transfer/www/speed.html usr/share/lan-transfer/www/speed.js usr/share/lan-transfer/www/cgi-bin/speed \
                    usr/share/luci/menu.d/luci-app-lan-transfer.json usr/share/rpcd/acl.d/luci-app-lan-transfer.json \
-                   usr/share/ucitrack/lan-transfer.json www/luci-static/resources/view/lan-transfer.js; do
+                   usr/share/ucitrack/lan-transfer.json www/luci-static/resources/view/lan-transfer.js www/luci-static/resources/view/lan-speed.js; do
             unsquashfs -cat "$root" "$f" > "$work/check" || { echo "镜像缺少 $f" >&2; exit 1; }
             cmp "$work/check" "$GITHUB_WORKSPACE/files/$f" || { echo "镜像内容与仓库不一致：$f" >&2; exit 1; }
           done
           unsquashfs -lls "$root" usr/lib/ucode/socket.so | grep -q 'socket\.so' || { echo "镜像缺少 socket.so" >&2; exit 1; }
           unsquashfs -lls "$root" etc/init.d/lan-transfer usr/share/lan-transfer/stun.uc usr/share/lan-transfer/www/cgi-bin/api \
+            usr/share/lan-transfer/www/cgi-bin/speed \
             | awk '$1 ~ /^-/ { print; if ($1 !~ /^-rwx/) bad = 1 } END { exit bad }'
           echo "邻传文件、权限与依赖包已在镜像内核对"
+
+      - name: Package LAN transfer and speed test add-on
+        run: python3 tools/package_lan_transfer.py
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rm2100-firmware-v${{ github.event.inputs.fw_version || '2.11.1' }}-openwrt-${{ github.event.inputs.openwrt_version || '24.10.2' }}
+          name: rm2100-firmware-v${{ github.event.inputs.fw_version || '2.12.0' }}-openwrt-${{ github.event.inputs.openwrt_version || '24.10.2' }}
           path: |
             ib/bin/targets/*/*/campus-fix-v*-xiaomi_redmi-router-ac2100-squashfs-kernel1.bin
             ib/bin/targets/*/*/campus-fix-v*-xiaomi_redmi-router-ac2100-squashfs-rootfs0.bin
             ib/bin/targets/*/*/campus-fix-v*-xiaomi_redmi-router-ac2100-squashfs-sysupgrade.bin
             ib/bin/targets/*/*/campus-fix-v*-xiaomi_redmi-router-ac2100.manifest
             ib/bin/targets/*/*/sha256sums
+            firmware-out/lan-transfer-addon.tar.gz
+            firmware-out/lan-transfer-addon.tar.gz.sha256
           retention-days: 30

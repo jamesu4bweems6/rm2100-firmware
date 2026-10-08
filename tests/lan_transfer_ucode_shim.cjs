@@ -113,6 +113,7 @@ function fileHandle(file) {
 }
 
 let stdinCache = null;
+let stdinOffset = 0;
 const builtins = {
   print: (...args) => { for (const a of args) write(1, typeof a === 'string' ? a : a == null ? '' : typeof a === 'object' ? toJson(a) : String(a)); },
   printf: (fmt, ...args) => write(1, format(fmt, args)),
@@ -165,7 +166,9 @@ const builtins = {
   stdin: {
     read: n => {
       if (stdinCache === null) stdinCache = safe(() => fs.readFileSync(0)) || Buffer.alloc(0);
-      return stdinCache.subarray(0, n).toString('latin1');
+      const data = stdinCache.subarray(stdinOffset, stdinOffset + n).toString('latin1');
+      stdinOffset += data.length;
+      return data;
     }
   }
 };

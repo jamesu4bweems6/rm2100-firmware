@@ -3,7 +3,7 @@
 红米 RM AC2100（MediaTek MT7621A，128MB RAM / 16MB flash）专用 OpenWrt 固件，
 内置**校园网多设备检测规避**套件，通过 GitHub Actions 云端构建，本机无需 Linux 环境。
 
-**当前固件版本：v2.11.1**（刷入后 `cat /etc/campus-fix-version` 查询；LuCI 页脚也显示 `campus-fix vX.Y.Z`）
+**当前固件版本：v2.12.0**（刷入后 `cat /etc/campus-fix-version` 查询；LuCI 页脚也显示 `campus-fix vX.Y.Z`）
 
 **内网文件互传「邻传」**：连在这台路由器上的手机、电脑用浏览器打开 `http://路由器LAN地址:8080/`（默认 [192.168.1.1:8080](http://192.168.1.1:8080/)）就能互相看到，直接发文件和文字，不用装应用、不用登录后台、不经过外网。详见下方「内网文件互传」一节和 [使用、安装与验证说明](docs/lan-transfer.md)。
 
@@ -93,6 +93,12 @@
 - **文件大小**：v2.11.1 不设固定接收上限，实际容量取决于浏览器和设备剩余空间；ZIP 打包使用 ZIP32，约 4 GiB 以上请逐个保存。不支持断点续传。微信 / QQ 内打开时会提示改用系统浏览器
 - LuCI 页面可开关功能、改端口；命令行：`uci set lan-transfer.main.enabled='0'; uci commit lan-transfer`
 
+### 内网测速（LuCI「服务 → 内网测速」）
+
+打开 `http://路由器LAN地址:8080/speed.html`，直接测**当前手机或电脑 ↔ 路由器**的下载、上传速度和 HTTP 往返延迟，不需要另一台设备，也不访问外网测速服务器。可选每个方向 3 / 5 / 10 / 15 秒，支持停止；同时显示 Mbps、MB/s 和实际数据量。测试数据仅在内存中分块处理，不写闪存、不保存文件。与邻传共用端口和开关，邻传页面右上角也可进入。
+
+结果包含路由器 HTTP 服务和 CPU 的处理开销，反映当前设备到路由器的实际传输能力；不能当作端口标称速率或宽带速度。测速时请保持页面在前台，并暂停其他传输。
+
 ### 刻意不做的（及理由）
 
 - **不封 DoH**：走 443/TCP 与正常流量无法区分，误伤太大；QUIC 已封，
@@ -103,7 +109,7 @@
 ## 使用方法
 
 1. **构建**：本仓库已配好 Actions。进 **Actions → Build RM AC2100 OpenWrt
-   firmware → Run workflow**，默认参数（24.10.2 + LuCI + Argon 主题 + 简体中文 + v2.11.1）直接 Run，
+   firmware → Run workflow**，默认参数（24.10.2 + LuCI + Argon 主题 + 简体中文 + v2.12.0）直接 Run，
    约 3-5 分钟出包。可调输入：
    - `openwrt_version`：OpenWrt 底包版本
    - `include_luci`：是否带 LuCI（false = 纯 CLI，省内存）
@@ -135,7 +141,7 @@
 ## 首次进系统检查清单
 
 ```
-cat /etc/campus-fix-version        # 应显示 2.11.1
+cat /etc/campus-fix-version        # 应显示 2.12.0
 nft list chain inet fw4 campus_ttl_postrouting     # counter 在涨 = TTL 归一生效
 nft list chain inet fw4 campus_quic_block          # drop 在涨 = 有客户端试图 QUIC
 nft list chain inet fw4 campus_leak_block          # 发现协议封锁生效
@@ -211,6 +217,8 @@ files/
     └── 99-campus-fix-banner         # 版本戳 + IPv6 RA 关闭 + 登录横幅
 ```
 
+代码仓库：[jamesu4bweems6/rm2100-firmware](https://github.com/jamesu4bweems6/rm2100-firmware)；固件下载：[Releases](https://github.com/jamesu4bweems6/rm2100-firmware/releases)。
+
 ## 版本历史
 
 | 版本 | 内容 |
@@ -261,3 +269,5 @@ files/
 运行 `python3 tests/test_review_fixes.py`，需要 Python 3.10+、Node.js、curl，以及 BusyBox ash 或 dash。Windows 可使用 Git for Windows。测试使用临时目录及本机 HTTP 服务，不连接校园网；RPC 参数测试使用 Node.js 兼容层；CI 另以固件同版本 ucode 原生执行登录、下线和 MAC 生成冒烟测试。尚未进行真机认证验证。
 
 邻传：`python3 tests/test_lan_transfer.py` 跑后端、二维码、启动脚本、STUN 与文件卫生测试；浏览器端到端测试见 [docs/lan-transfer.md](docs/lan-transfer.md#验证)。CI 在原生 ucode、按固件参数启动的真实 uhttpd 与 STUN 应答器上运行同一组浏览器测试。尚未在 RM2100 真机上验证。
+
+| v2.12.0 | 新增当前设备与路由器之间的内网测速：下载、上传与 HTTP 往返延迟；LuCI「服务 → 内网测速」和邻传右上角入口；3 / 5 / 10 / 15 秒可选、预热与停止、实际收到/确认的字节计数；仅 LAN 同源短请求，64 KiB 流式处理且不写入存储。保留原有邻传文件/文字互传功能，包含增量安装包、原生 ucode 与真实浏览器测试及镜像内容/权限核验。 |

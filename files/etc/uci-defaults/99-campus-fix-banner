@@ -1,6 +1,6 @@
 #!/bin/sh
 # campus-fix v2.3: version stamp (queried via: cat /etc/campus-fix-version)
-echo "2.11.1" > /etc/campus-fix-version
+echo "2.12.0" > /etc/campus-fix-version
 
 # Replace default banner with campus-fix usage notes
 cat > /etc/banner <<EOF

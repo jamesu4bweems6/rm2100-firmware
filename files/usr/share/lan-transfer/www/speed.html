@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>内网测速 · 当前设备与路由器</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css?v=2">
+  <script src="speed.js?v=1" defer></script>
+</head>
+<body>
+  <a class="skip" href="#speed-title">跳到测速</a>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 8h13l-3.5-3.5M19 16H6l3.5 3.5"/></svg></span>
+      <span class="brand-name">内网测速</span>
+      <span class="brand-sub">当前设备 ↔ 路由器</span>
+    </div>
+    <div class="top-actions"><a class="btn ghost page-nav" href="./">文件互传</a></div>
+  </header>
+  <main class="layout">
+    <section id="speed-panel" class="speed-panel" aria-labelledby="speed-title" data-state="idle">
+      <div class="section-head"><h1 id="speed-title" tabindex="-1">测量本机到路由器的速度</h1><span class="tag direct">仅内网</span></div>
+      <p class="speed-intro">直接测试当前手机或电脑与路由器之间的上传、下载速度，不需要另一台设备。</p>
+      <p>测速路由器：<strong id="speed-router"></strong></p>
+      <div class="speed-controls">
+        <label for="speed-duration">每个方向测速时长
+          <select id="speed-duration"><option value="3">3 秒</option><option value="5" selected>5 秒</option><option value="10">10 秒</option><option value="15">15 秒</option></select>
+        </label>
+        <button id="speed-start" class="btn primary" type="button">开始测速</button>
+        <button id="speed-stop" class="btn danger" type="button" hidden>停止测速</button>
+      </div>
+      <p id="speed-status" role="status" aria-live="polite">准备就绪，点击开始测速</p>
+      <div class="speed-results">
+        <div class="speed-metric"><span>下载 · 路由器 → 本机</span><strong id="speed-down">—</strong><small id="speed-down-detail"></small></div>
+        <div class="speed-metric"><span>上传 · 本机 → 路由器</span><strong id="speed-up">—</strong><small id="speed-up-detail"></small></div>
+        <div class="speed-metric"><span>往返延迟 · 本机 ↔ 路由器</span><strong id="speed-latency">—</strong><small id="speed-latency-detail"></small></div>
+      </div>
+      <progress id="speed-progress" max="1" value="0" aria-label="测速进度"></progress>
+      <p class="speed-note">测速只访问上方路由器，不连接外网测速服务器。测试数据接收后即丢弃，不保存文件。每个方向先预热 1 秒，再显示实际吞吐量（Mbps 与 MB/s）。请保持页面在前台，暂停其他下载和文件传输。</p>
+    </section>
+  </main>
+  <footer class="foot">
+    <p>结果反映当前设备与路由器之间的实际 HTTP 传输能力，受 Wi-Fi 信号、有线连接、浏览器及路由器 CPU 性能影响。</p>
+    <p>这不是宽带外网速度，也不是路由器端口的标称速率；延迟包含 HTTP 请求处理时间。</p>
+  </footer>
+</body>
+</html>

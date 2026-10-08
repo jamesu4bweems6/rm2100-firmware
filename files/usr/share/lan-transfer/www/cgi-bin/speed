@@ -1,0 +1,49 @@
+#!/usr/bin/ucode
+// 当前设备与路由器测速。每次最多 1 MiB，64 KiB 流式读写，不保存到闪存或 /tmp。
+'use strict';
+import { stdin } from 'fs';
+const CHUNK = 1048576;
+const BLOCK = 65536;
+const REASONS = { '200': 'OK', '400': 'Bad Request', '403': 'Forbidden', '405': 'Method Not Allowed', '411': 'Length Required', '413': 'Payload Too Large', '415': 'Unsupported Media Type' };
+
+function emit(code, data) {
+	let raw = sprintf('%J', data);
+	print(sprintf('Status: %d %s\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n', code, REASONS[code], length(raw)), raw);
+}
+function fail(code, message) { emit(code, { error: message }); exit(0); }
+function same_origin() {
+	let host = getenv('HTTP_HOST'), origin = getenv('HTTP_ORIGIN'), port = getenv('SERVER_PORT');
+	if (type(host) != 'string' || origin != 'http://' + host) return false;
+	if (host == getenv('SERVER_ADDR') + ':' + port) return true;
+	let m = match(host, /^[a-z0-9-]+(\.lan)?:([0-9]+)$/);
+	return m != null && m[2] == port;
+}
+if (getenv('REQUEST_METHOD') != 'POST') fail(405, '仅支持 POST 请求');
+if (!same_origin()) fail(403, '请直接用路由器内网地址打开测速页面');
+let action = getenv('QUERY_STRING');
+if (action != 'a=ping' && action != 'a=download' && action != 'a=upload') fail(400, '无效的测速操作');
+let rawlen = getenv('CONTENT_LENGTH');
+if (type(rawlen) != 'string' || match(rawlen, /^[0-9]{1,8}$/) == null) fail(411, '缺少请求长度');
+let len = int(rawlen);
+if (len > CHUNK) fail(413, '每次最多上传 1 MiB');
+if (getenv('CONTENT_TYPE') != 'application/octet-stream') fail(415, '需要二进制测速数据');
+if (action != 'a=upload' && len != 0) fail(400, '该操作不需要请求数据');
+if (action == 'a=upload') {
+	if (len < 1) fail(400, '上传数据不能为空');
+	let received = 0;
+	while (received < len) {
+		let remaining = len - received;
+		let part = stdin.read(remaining < BLOCK ? remaining : BLOCK);
+		if (type(part) != 'string' || length(part) == 0) fail(400, '上传数据不完整');
+		received += length(part);
+	}
+	emit(200, { bytes: received });
+}
+else if (action == 'a=ping') emit(200, { ok: true });
+else {
+	// 只在内存中生成一个 64 KiB 块复用；无 HTTP 压缩，按实际响应字节测速。
+	let block = chr(0);
+	while (length(block) < BLOCK) block += block;
+	print(sprintf('Status: 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\nCache-Control: no-store, no-transform\r\nX-Content-Type-Options: nosniff\r\n\r\n', CHUNK));
+	for (let sent = 0; sent < CHUNK; sent += BLOCK) print(block);
+}
