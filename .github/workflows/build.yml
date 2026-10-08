@@ -118,9 +118,29 @@ jobs:
           for HOST in https://downloads.openwrt.org https://mirror-03.infra.openwrt.org; do
             BASE="$HOST/releases/${VER}/targets/${TARGET}"
             echo "Downloading: $BASE/$FILE"
-            if curl -4 -fL --connect-timeout 20 --max-time 240 --speed-limit 32768 --speed-time 30 \
-                -o imagebuilder.tar.zst "$BASE/$FILE" \
-              && curl -4 -fsSL --connect-timeout 20 --max-time 60 -o imagebuilder.sha256sums "$BASE/sha256sums"; then
+            if curl -4 -fsSL --connect-timeout 20 --max-time 60 -o imagebuilder.sha256sums "$BASE/sha256sums" \
+              && curl -4 -fsSI --connect-timeout 20 --max-time 60 -o imagebuilder.headers "$BASE/$FILE"; then
+              SIZE=$(awk 'tolower($1) == "content-length:" { gsub("\r", "", $2); print $2 }' imagebuilder.headers | tail -n1)
+              case "$SIZE" in ''|*[!0-9]*) continue ;; esac
+              [ "$SIZE" -gt 0 ] || continue
+              PART_DIR=$(mktemp -d)
+              PART_SIZE=$(( (SIZE + 3) / 4 ))
+              PIDS=()
+              for PART in 0 1 2 3; do
+                FIRST=$(( PART * PART_SIZE ))
+                LAST=$(( FIRST + PART_SIZE - 1 ))
+                [ "$LAST" -lt "$SIZE" ] || LAST=$(( SIZE - 1 ))
+                curl -4 -fsSL --connect-timeout 20 --max-time 900 --speed-limit 16384 --speed-time 60 \
+                  --retry 2 --retry-delay 5 --range "$FIRST-$LAST" -o "$PART_DIR/$PART" "$BASE/$FILE" &
+                PIDS+=("$!")
+              done
+              DOWNLOADED=1
+              for PID in "${PIDS[@]}"; do
+                wait "$PID" || DOWNLOADED=0
+              done
+              [ "$DOWNLOADED" = 1 ] || continue
+              cat "$PART_DIR/0" "$PART_DIR/1" "$PART_DIR/2" "$PART_DIR/3" > imagebuilder.tar.zst
+              [ "$(stat -c %s imagebuilder.tar.zst)" = "$SIZE" ] || continue
               EXPECTED=$(awk -v file="$FILE" '$2 == file || $2 == "*" file { print $1 }' imagebuilder.sha256sums)
               if [ -n "$EXPECTED" ] && printf '%s  imagebuilder.tar.zst\n' "$EXPECTED" | sha256sum -c -; then
                 fetched=1
