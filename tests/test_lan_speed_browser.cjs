@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const base = process.env.LAN_TRANSFER_URL || 'http://127.0.0.1:8765/';
-const origin = new URL(base).origin;
+let origin = new URL(base).origin;
 const shots = process.env.LAN_TRANSFER_SCREENSHOTS;
 const errors = [], requests = [];
 const MiB = 1048576;
@@ -31,13 +31,14 @@ async function stopped(page) {
     page.on('request', r => requests.push(r.url()));
     await page.goto(base);
     await page.getByRole('link', { name: '内网测速' }).click();
-    await page.waitForLoadState('domcontentloaded');
+    await page.waitForFunction(() => document.querySelector('#speed-start') && !document.querySelector('#speed-start').disabled);
+    origin = new URL(page.url()).origin;
     assert.equal(new URL(page.url()).pathname, '/speed.html');
     assert.equal(await page.locator('#speed-router').textContent(), new URL(base).host);
     await page.locator('#speed-duration').selectOption('3');
     const replies = [];
     page.on('response', async r => {
-      if (!r.url().includes('/cgi-bin/speed?')) return;
+      if (!r.url().includes('/speed?')) return;
       if (r.url().endsWith('a=upload')) {
         try { const data = await r.json(); replies.push(data.bytes); } catch (_) { /* 停止请求会中断响应 */ }
       }
@@ -60,8 +61,8 @@ async function stopped(page) {
     const testRequests = requests.slice(firstRequest);
     assert.equal(testRequests.filter(url => url.endsWith('a=ping')).length, 7);
     assert.ok(testRequests.some(url => url.endsWith('a=download')));
-    assert.ok(replies.length > 0 && replies.every(n => n === MiB), '所有上传必须由路由器确认实际收到 1 MiB');
-    assert.ok(testRequests.every(url => url.startsWith(`${origin}/cgi-bin/speed?`)), '测速不能发现其他设备或请求外部服务');
+    assert.ok(replies.length > 0 && replies.every(n => n === 4 * MiB), '所有上传必须由路由器确认实际收到 4 MiB');
+    assert.ok(testRequests.every(url => url.startsWith(`${origin}/speed?`)), '测速不能发现其他设备或请求外部服务');
     if (shots) {
       await fs.mkdir(shots, { recursive: true });
       await page.screenshot({ path: path.join(shots, 'speed-desktop.png'), fullPage: true });
@@ -82,26 +83,27 @@ async function stopped(page) {
     await stopped(page);
     console.log('PASS 上传中停止会清除部分结果并恢复按钮');
 
-    await page.route('**/cgi-bin/speed?a=upload', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{"bytes":1}' }));
+    await page.route('**/speed?a=upload', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{"bytes":1}' }));
     await page.locator('#speed-start').click();
     await stopped(page);
     assert.match(await page.locator('#speed-status').textContent(), /未完整收到/);
-    await page.unroute('**/cgi-bin/speed?a=upload');
-    await page.route('**/cgi-bin/speed?a=download', route => route.fulfill({ status: 200, contentType: 'text/html', body: 'wrong service' }));
+    await page.unroute('**/speed?a=upload');
+    await page.route('**/speed?a=download', route => route.fulfill({ status: 200, contentType: 'text/html', body: 'wrong service' }));
     await page.locator('#speed-start').click();
     await stopped(page);
     assert.match(await page.locator('#speed-status').textContent(), /下载响应不正确/);
     console.log('PASS 不完整上传确认与错误下载响应不会生成测速结果');
-    await page.unroute('**/cgi-bin/speed?a=download');
+    await page.unroute('**/speed?a=download');
 
     const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: 'dark' });
     const phone = await mobile.newPage();
     phone.on('pageerror', e => errors.push(e.message));
     await phone.goto(new URL('speed.html', base).href);
+    await phone.waitForFunction(() => document.querySelector('#speed-start') && !document.querySelector('#speed-start').disabled);
     assert.ok(await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth), '手机页面不能横向溢出');
     if (shots) await phone.screenshot({ path: path.join(shots, 'speed-mobile.png'), fullPage: true });
     console.log('PASS 手机深色页面布局无横向溢出');
-    assert.equal(requests.filter(url => /^https?:/.test(url) && new URL(url).origin !== origin).length, 0);
+    assert.equal(requests.filter(url => /^https?:/.test(url) && ![origin, new URL(base).origin].includes(new URL(url).origin)).length, 0);
     assert.deepEqual(errors, [], '浏览器 JavaScript 错误');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

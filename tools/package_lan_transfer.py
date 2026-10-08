@@ -14,6 +14,7 @@ FILES = sorted([
     'etc/init.d/lan-transfer',
     'etc/config/lan-transfer',
     'usr/share/lan-transfer/stun.uc',
+    'usr/share/lan-transfer/speed.uc',
     'usr/share/luci/menu.d/luci-app-lan-transfer.json',
     'usr/share/rpcd/acl.d/luci-app-lan-transfer.json',
     'usr/share/ucitrack/lan-transfer.json',
@@ -21,17 +22,16 @@ FILES = sorted([
     'www/luci-static/resources/view/lan-speed.js',
     *(p.relative_to(ROOT / 'files').as_posix() for p in (ROOT / 'files/usr/share/lan-transfer/www').rglob('*') if p.is_file()),
 ])
-EXECUTABLE = {'etc/init.d/lan-transfer', 'usr/share/lan-transfer/stun.uc', 'usr/share/lan-transfer/www/cgi-bin/api', 'usr/share/lan-transfer/www/cgi-bin/speed'}
+EXECUTABLE = {'etc/init.d/lan-transfer', 'usr/share/lan-transfer/stun.uc', 'usr/share/lan-transfer/speed.uc', 'usr/share/lan-transfer/www/cgi-bin/api', 'usr/share/lan-transfer/www/cgi-bin/speed'}
 MTIME = 1790000000  # 固定时间戳，保证同样的源文件打出同样的包
 
 INSTALL = r'''#!/bin/sh
 # 邻传增量安装：只复制本功能的文件，不改网络和防火墙配置，不自动安装软件包。
 set -eu
 [ "$(id -u)" = 0 ] || { echo '请在路由器上以 root 身份运行' >&2; exit 1; }
-for dep in /usr/sbin/uhttpd /usr/bin/ucode /usr/lib/ucode/fs.so; do
-	[ -e "$dep" ] || { echo "缺少 $dep，请先执行：opkg update && opkg install uhttpd ucode ucode-mod-fs" >&2; exit 1; }
+for dep in /usr/sbin/uhttpd /usr/bin/ucode /usr/lib/ucode/fs.so /usr/lib/ucode/socket.so; do
+	[ -e "$dep" ] || { echo "缺少 $dep，请先执行：opkg update && opkg install uhttpd ucode ucode-mod-fs ucode-mod-socket" >&2; exit 1; }
 done
-[ -e /usr/lib/ucode/socket.so ] || echo '提示：未安装 ucode-mod-socket，不启用内网 STUN（opkg install ucode-mod-socket 可提高直连成功率）'
 src="$(cd "$(dirname "$0")" && pwd)/files"
 # 清掉早期未发布版本的旧文件布局
 rm -f /usr/share/lan-transfer/index.html /usr/share/lan-transfer/app.js /usr/share/lan-transfer/style.css \
@@ -44,7 +44,7 @@ rmdir /usr/share/lan-transfer/cgi-bin 2>/dev/null || true
 	mkdir -p "/$(dirname "$f")"
 	cp "$src/$f" "/$f"
 done
-chmod 0755 /etc/init.d/lan-transfer /usr/share/lan-transfer/stun.uc /usr/share/lan-transfer/www/cgi-bin/api /usr/share/lan-transfer/www/cgi-bin/speed
+chmod 0755 /etc/init.d/lan-transfer /usr/share/lan-transfer/stun.uc /usr/share/lan-transfer/speed.uc /usr/share/lan-transfer/www/cgi-bin/api /usr/share/lan-transfer/www/cgi-bin/speed
 rm -f /tmp/luci-indexcache* /tmp/luci-modulecache/* 2>/dev/null || true
 /etc/init.d/lan-transfer enable
 /etc/init.d/lan-transfer restart

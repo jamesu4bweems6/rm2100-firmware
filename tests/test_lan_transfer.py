@@ -472,7 +472,8 @@ procd_add_interface_trigger() { echo "iface-trigger $*"; }
         self.assertIn('param command /usr/sbin/uhttpd -f -p 192.168.31.1:8080 -h /usr/share/lan-transfer/www -x /cgi-bin '
                       '-t 30 -T 30 -n 6 -N 48 -D -S -c /dev/null', out)
         self.assertIn('param command /usr/bin/ucode /usr/share/lan-transfer/stun.uc 192.168.31.1 3478', out)
-        self.assertEqual(out.count('open '), 2)
+        self.assertIn('param command /usr/bin/ucode /usr/share/lan-transfer/speed.uc 192.168.31.1 8080', out)
+        self.assertEqual(out.count('open '), 3)
         self.assertIn('reload-trigger lan-transfer network', out)
         self.assertIn('iface-trigger interface.* lan /etc/init.d/lan-transfer reload', out)
 
@@ -575,6 +576,7 @@ class StunTests(unittest.TestCase):
 class HygieneTests(unittest.TestCase):
     """固件文件的基本卫生：UTF-8、无替换字符与 CRLF、JSON 可解析、LuCI 视图语法正确。"""
     FILES = [INIT, ROOT / 'files/etc/config/lan-transfer', ROOT / 'files/etc/uci-defaults/92-lan-transfer', STUN,
+             ROOT / 'files/usr/share/lan-transfer/speed.uc',
              ROOT / 'files/usr/share/luci/menu.d/luci-app-lan-transfer.json',
              ROOT / 'files/usr/share/rpcd/acl.d/luci-app-lan-transfer.json',
              ROOT / 'files/usr/share/ucitrack/lan-transfer.json',
@@ -624,10 +626,12 @@ def stage(target, port, bind='127.0.0.1'):
                    .replace('#!/usr/bin/ucode', '#!' + (NATIVE or '/usr/bin/ucode'), 1), encoding='utf-8', newline='\n')
     api.chmod(0o755)
     speed = target / 'cgi-bin/speed'
-    speed.write_text(SPEED.read_text(encoding='utf-8').replace('#!/usr/bin/ucode', '#!' + (NATIVE or '/usr/bin/ucode'), 1), encoding='utf-8', newline='\n')
+    speed.write_text(SPEED.read_text(encoding='utf-8').replace("'/tmp/lan-transfer'", json.dumps(state.as_posix()))
+                     .replace('#!/usr/bin/ucode', '#!' + (NATIVE or '/usr/bin/ucode'), 1), encoding='utf-8', newline='\n')
     speed.chmod(0o755)
     stun = STUN.read_text(encoding='utf-8').replace("'/tmp/lan-transfer'", json.dumps(state.as_posix()))
     (target.parent / 'stun.uc').write_text(stun, encoding='utf-8', newline='\n')
+    shutil.copyfile(ROOT / 'files/usr/share/lan-transfer/speed.uc', target.parent / 'speed.uc')
     print(uhttpd_command(target, port, bind).replace('/usr/sbin/uhttpd', os.environ.get('UHTTPD_BIN', '/usr/sbin/uhttpd'), 1))
 
 

@@ -8,7 +8,7 @@
   <title>内网测速 · 当前设备与路由器</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="style.css?v=2">
-  <script src="speed.js?v=1" defer></script>
+  <script src="speed.js?v=3" defer></script>
 </head>
 <body>
   <a class="skip" href="#speed-title">跳到测速</a>
@@ -29,7 +29,7 @@
         <label for="speed-duration">每个方向测速时长
           <select id="speed-duration"><option value="3">3 秒</option><option value="5" selected>5 秒</option><option value="10">10 秒</option><option value="15">15 秒</option></select>
         </label>
-        <button id="speed-start" class="btn primary" type="button">开始测速</button>
+        <button id="speed-start" class="btn primary" type="button" disabled>开始测速</button>
         <button id="speed-stop" class="btn danger" type="button" hidden>停止测速</button>
       </div>
       <p id="speed-status" role="status" aria-live="polite">准备就绪，点击开始测速</p>

@@ -1,7 +1,8 @@
 #!/usr/bin/ucode
 // 当前设备与路由器测速。每次最多 1 MiB，64 KiB 流式读写，不保存到闪存或 /tmp。
 'use strict';
-import { stdin } from 'fs';
+import { stdin, readfile } from 'fs';
+const ROOT = '/tmp/lan-transfer';
 const CHUNK = 1048576;
 const BLOCK = 65536;
 const REASONS = { '200': 'OK', '400': 'Bad Request', '403': 'Forbidden', '405': 'Method Not Allowed', '411': 'Length Required', '413': 'Payload Too Large', '415': 'Unsupported Media Type' };
@@ -21,14 +22,21 @@ function same_origin() {
 if (getenv('REQUEST_METHOD') != 'POST') fail(405, '仅支持 POST 请求');
 if (!same_origin()) fail(403, '请直接用路由器内网地址打开测速页面');
 let action = getenv('QUERY_STRING');
-if (action != 'a=ping' && action != 'a=download' && action != 'a=upload') fail(400, '无效的测速操作');
+if (action != 'a=endpoint' && action != 'a=ping' && action != 'a=download' && action != 'a=upload') fail(400, '无效的测速操作');
 let rawlen = getenv('CONTENT_LENGTH');
 if (type(rawlen) != 'string' || match(rawlen, /^[0-9]{1,8}$/) == null) fail(411, '缺少请求长度');
 let len = int(rawlen);
 if (len > CHUNK) fail(413, '每次最多上传 1 MiB');
 if (getenv('CONTENT_TYPE') != 'application/octet-stream') fail(415, '需要二进制测速数据');
 if (action != 'a=upload' && len != 0) fail(400, '该操作不需要请求数据');
-if (action == 'a=upload') {
+if (action == 'a=endpoint') {
+	let info;
+	try { info = json(readfile(ROOT + '/speed.json')); } catch (e) { fail(400, '常驻测速服务未就绪，请重启邻传或安装 ucode-mod-socket'); }
+	if (info.address != getenv('SERVER_ADDR') || info.webport != int(getenv('SERVER_PORT')) || info.chunk != 4194304 ||
+		info.port < 1 || info.port > 65535 || !readfile('/proc/' + info.pid + '/cmdline')) fail(400, '常驻测速服务未就绪，请重启邻传');
+	emit(200, info);
+}
+else if (action == 'a=upload') {
 	if (len < 1) fail(400, '上传数据不能为空');
 	let received = 0;
 	while (received < len) {

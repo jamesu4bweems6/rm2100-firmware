@@ -76,6 +76,7 @@ jobs:
           python3 tests/test_native_ucode.py
           python3 tests/test_lan_transfer.py
           python3 tests/test_lan_speed.py
+          python3 tests/test_lan_speed_daemon.py
 
       - name: Test LAN transfer on real uhttpd, native ucode and STUN in real browsers
         run: |
@@ -89,7 +90,9 @@ jobs:
           UHTTPD_PID=$!
           /usr/bin/ucode /tmp/lt/stun.uc "$LAN_IP" 3478 > /tmp/lt-stun.log 2>&1 &
           STUN_PID=$!
-          trap 'kill "$UHTTPD_PID" "$STUN_PID" 2>/dev/null || true; cat /tmp/lt-uhttpd.log /tmp/lt-stun.log' EXIT
+          /usr/bin/ucode /tmp/lt/speed.uc "$LAN_IP" 8765 /tmp/lt/state /tmp/lt/www > /tmp/lt-speed.log 2>&1 &
+          SPEED_PID=$!
+          trap 'kill "$UHTTPD_PID" "$STUN_PID" "$SPEED_PID" 2>/dev/null || true; cat /tmp/lt-uhttpd.log /tmp/lt-stun.log /tmp/lt-speed.log' EXIT
           for attempt in $(seq 1 30); do
             curl -fsS "http://$LAN_IP:8765/" -o /dev/null && break
             sleep 1
@@ -157,7 +160,7 @@ jobs:
           mkdir -p ib/files
           cp -r files/* ib/files/
           chmod 0755 ib/files/etc/init.d/lan-transfer ib/files/etc/uci-defaults/92-lan-transfer \
-            ib/files/usr/share/lan-transfer/stun.uc ib/files/usr/share/lan-transfer/www/cgi-bin/api \
+            ib/files/usr/share/lan-transfer/stun.uc ib/files/usr/share/lan-transfer/speed.uc ib/files/usr/share/lan-transfer/www/cgi-bin/api \
             ib/files/usr/share/lan-transfer/www/cgi-bin/speed
           # stamp the firmware version into the overlay
           FWV="${{ github.event.inputs.fw_version || '2.12.0' }}"
@@ -252,7 +255,7 @@ jobs:
           tar -xf ./campus-fix-v*-squashfs-sysupgrade.bin -C "$work"
           root=$(find "$work" -type f -name root | head -n1)
           for f in etc/init.d/lan-transfer etc/config/lan-transfer etc/uci-defaults/92-lan-transfer \
-                   usr/share/lan-transfer/stun.uc usr/share/lan-transfer/www/index.html usr/share/lan-transfer/www/app.js \
+                   usr/share/lan-transfer/stun.uc usr/share/lan-transfer/speed.uc usr/share/lan-transfer/www/index.html usr/share/lan-transfer/www/app.js \
                    usr/share/lan-transfer/www/qr.js usr/share/lan-transfer/www/style.css usr/share/lan-transfer/www/cgi-bin/api \
                    usr/share/lan-transfer/www/speed.html usr/share/lan-transfer/www/speed.js usr/share/lan-transfer/www/cgi-bin/speed \
                    usr/share/luci/menu.d/luci-app-lan-transfer.json usr/share/rpcd/acl.d/luci-app-lan-transfer.json \
@@ -261,7 +264,7 @@ jobs:
             cmp "$work/check" "$GITHUB_WORKSPACE/files/$f" || { echo "镜像内容与仓库不一致：$f" >&2; exit 1; }
           done
           unsquashfs -lls "$root" usr/lib/ucode/socket.so | grep -q 'socket\.so' || { echo "镜像缺少 socket.so" >&2; exit 1; }
-          unsquashfs -lls "$root" etc/init.d/lan-transfer usr/share/lan-transfer/stun.uc usr/share/lan-transfer/www/cgi-bin/api \
+          unsquashfs -lls "$root" etc/init.d/lan-transfer usr/share/lan-transfer/stun.uc usr/share/lan-transfer/speed.uc usr/share/lan-transfer/www/cgi-bin/api \
             usr/share/lan-transfer/www/cgi-bin/speed \
             | awk '$1 ~ /^-/ { print; if ($1 !~ /^-rwx/) bad = 1 } END { exit bad }'
           echo "邻传文件、权限与依赖包已在镜像内核对"

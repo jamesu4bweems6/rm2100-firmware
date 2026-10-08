@@ -16,7 +16,9 @@
 
 LuCI「服务 → 内网测速」或邻传页面右上角的「内网测速」可打开 `http://路由器LAN地址:8080/speed.html`。仅需当前一台手机或电脑，点击开始后依次测 HTTP 往返延迟、下载（路由器到本机）、上传（本机到路由器）；每个方向可选 3 / 5 / 10 / 15 秒，先预热 1 秒，支持随时停止。
 
-测速请求只访问同源路由器，最多两条 1 MiB 请求并行。下载按浏览器实际收到的字节计算，上传等路由器确认收完才计数；完成尾部请求的时间也计入测量。路由器以 64 KiB 块生成/丢弃测试数据，不在 `/tmp` 或闪存中保存测试文件。结果显示 Mbps、MB/s、实际数据量和测量时间；延迟取 6 次 HTTP 请求的中位数。
+测速使用常驻 ucode TCP 服务，复用连接，最多两条 4 MiB 请求并行，避免每块重复启动 CGI 和管道转发开销。路由器以 64 KiB 缓冲生成/丢弃数据，不在 `/tmp` 或闪存中保存测试文件。下载按浏览器实际收到的字节计算，上传等路由器确认收完才计数；尾部请求完成时间也计入测量。延迟取 6 次 HTTP 请求的中位数，包含服务处理时间。
+
+原来的 `:8080/speed.html` 入口保持可用，会自动跳转到常驻测速服务。服务仅绑定 LAN 地址，使用系统分配的空闲 TCP 端口，随邻传一起启停；端口改变后从原入口重新打开即可。页面、脚本和测速请求仍然同源，保留 `connect-src 'self'`；邻传继续使用原端口。服务最多 16 个连接，每个请求最长 30 秒，空闲连接 15 秒关闭，校验 Host、Origin、请求长度并拒绝重复请求头及分块请求。
 
 测速与邻传共用端口和服务开关，不需要 WebRTC 或第二台设备。结果受 Wi-Fi/有线链路、浏览器和路由器 CPU 影响，是本机到路由器的实际 HTTP 传输能力，不代表外网宽带速度或交换芯片的转发极限。测速请保持页面在前台，并暂停其他传输。
 
@@ -62,7 +64,7 @@ tar -xzf /tmp/lan-transfer-addon.tar.gz -C /tmp/lan-transfer-addon
 sh /tmp/lan-transfer-addon/install.sh
 ```
 
-安装器只复制本功能的文件，已有的 `/etc/config/lan-transfer` 保留不动。缺少依赖时会退出并提示，需要先执行 `opkg update && opkg install uhttpd ucode ucode-mod-fs`；`ucode-mod-socket` 可选，装了才会启用内网 STUN。增量安装的文件不在 sysupgrade 保留清单里，升级固件后需要重新安装（v2.11.0 起的 campus-fix 固件已自带）。
+安装器只复制本功能的文件，已有的 `/etc/config/lan-transfer` 保留不动。缺少依赖时会退出并提示，需要先执行 `opkg update && opkg install uhttpd ucode ucode-mod-fs ucode-mod-socket`；新版常驻测速与内网 STUN 需要 socket 模块。增量安装的文件不在 sysupgrade 保留清单里，升级固件后需要重新安装（v2.11.0 起的 campus-fix 固件已自带）。
 
 ## 管理与排错
 

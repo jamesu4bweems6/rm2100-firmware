@@ -1,17 +1,48 @@
 'use strict';
-/* 当前设备 ↔ 路由器。仅请求同源 CGI；下载按收到字节计数，上传按路由器确认计数。
- * 两条短请求流水线，每块不超过 1 MiB，不写闪存、不暂存测试文件。 */
+/* 当前设备 ↔ 路由器。常驻服务复用 TCP 连接；下载按收到字节计数，上传按路由器确认计数。
+ * 两条 4 MiB 流水线，路由器仅使用 64 KiB 流式缓冲，不写闪存。 */
 (() => {
   const $ = id => document.getElementById(id);
-  const CHUNK = 1048576;
+  const CHUNK = 4194304;
+  const MiB = 1048576;
   const PARALLEL = 2;
   let active = null;
   $('speed-router').textContent = location.host;
   function check(s) { if (active !== s || s.controller.signal.aborted) throw new DOMException('测速已停止', 'AbortError'); }
   function status(text) { $('speed-status').textContent = text; }
+  $('speed-start').disabled = true;
+  const ready = (async () => {
+    status('正在连接路由器测速服务…');
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      let response, info;
+      try {
+        response = await fetch('cgi-bin/speed?a=endpoint', {
+          method: 'POST', cache: 'no-store', redirect: 'error',
+          headers: { 'Content-Type': 'application/octet-stream' }, body: '', signal: controller.signal
+        });
+        info = await response.json();
+      } finally { clearTimeout(timeout); }
+      if (!response.ok) throw new Error(info.error || '测速服务未就绪');
+      if (!Number.isInteger(info.port) || info.port < 1 || info.port > 65535 || info.chunk !== CHUNK ||
+          !Number.isInteger(info.webport) || info.webport < 1 || info.webport > 65535) throw new Error('测速服务配置不正确');
+      if (Number(location.port || 80) !== info.port) {
+        const target = new URL('speed.html', location.href);
+        target.port = info.port; target.search = ''; target.hash = '';
+        location.replace(target.href);
+        return false;
+      }
+      $('speed-router').textContent = `${location.hostname}:${info.webport}`;
+      document.querySelector('.page-nav').href = `http://${location.hostname}:${info.webport}/`;
+      $('speed-start').disabled = false;
+      status('已连接路由器 · 点击开始测速');
+      return true;
+    } catch (e) { status(e.name === 'AbortError' ? '连接测速服务超时，请重新打开测速页面' : e.message); return false; }
+  })();
   function showRate(dir, bytes, ms, measured = false) {
     $(`speed-${dir}`).textContent = `${(bytes * 8 / Math.max(1, ms) / 1000).toFixed(1)} Mbps`;
-    $(`speed-${dir}-detail`).textContent = `${(bytes / Math.max(1, ms) / 1000).toFixed(2)} MB/s · ${(bytes / CHUNK).toFixed(1)} MiB${measured ? ` · ${(ms / 1000).toFixed(2)} 秒` : ''}`;
+    $(`speed-${dir}-detail`).textContent = `${(bytes / Math.max(1, ms) / 1000).toFixed(2)} MB/s · ${(bytes / MiB).toFixed(1)} MiB${measured ? ` · ${(ms / 1000).toFixed(2)} 秒` : ''}`;
   }
   function reset() {
     for (const key of ['down', 'up', 'latency']) { $(`speed-${key}`).textContent = '—'; $(`speed-${key}-detail`).textContent = ''; }
@@ -25,7 +56,7 @@
     const timer = setTimeout(abort, 15000);
     // 响应体读完才清理超时，避免收到响应头后无限卡住。
     try {
-      const response = await fetch(`cgi-bin/speed?a=${action}`, {
+      const response = await fetch(`speed?a=${action}`, {
         method: 'POST', cache: 'no-store', credentials: 'same-origin', redirect: 'error',
         headers: { 'Content-Type': 'application/octet-stream' }, body, signal: controller.signal
       });
@@ -60,7 +91,7 @@
     } catch (e) {
       if (active !== s || s.controller.signal.aborted) throw new DOMException('测速已停止', 'AbortError');
       if (controller.signal.aborted) throw new Error('测速请求超时，请检查与路由器的连接');
-      if (e instanceof TypeError) throw new Error('无法连接路由器测速服务，请检查网络或更新测速安装包');
+      if (e instanceof TypeError) throw new Error('测速服务连接已断开，请从“文件互传”重新打开测速页面');
       throw e;
     } finally { clearTimeout(timer); s.controller.signal.removeEventListener('abort', abort); }
   }
@@ -105,6 +136,7 @@
     status(message);
   }
   async function start() {
+    if (!await ready) return;
     if (active) return;
     const seconds = Number($('speed-duration').value);
     if (![3, 5, 10, 15].includes(seconds)) return;
