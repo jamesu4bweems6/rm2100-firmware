@@ -647,6 +647,15 @@
     return via === 'p2p' ? '直连' : via === 'relay' ? '经路由器中转' : '';
   }
 
+  async function relayClosed(transfer) {
+    // 对方取消时，删除分块的 HTTP 请求可能比邮箱中的 stop/cancel 先到。
+    // 等终止消息决定状态，避免把主动取消误标成失败；后台轮询最长 8 秒。
+    hurry(12000);
+    const deadline = Date.now() + 10000;
+    while (!transfer.ended && Date.now() < deadline) await sleep(100);
+    throw new Error('对方已取消或离开');
+  }
+
   // ---------- 发送 ----------
   class Outgoing {
     constructor(peer, files) {
@@ -805,7 +814,7 @@
           await sleep(150);
           continue;
         }
-        if (res.status === 404) throw new Error('对方已取消或离开');
+        if (res.status === 404) await relayClosed(this);
         throw await errorOf(res);
       }
     }
@@ -1096,7 +1105,7 @@
           if (Date.now() - this.lastData > STALL_TIMEOUT) throw new Error('对方停止了发送，未完成的文件已丢弃');
           continue;
         }
-        if (res.status === 404) throw new Error('对方已取消或离开');
+        if (res.status === 404) await relayClosed(this);
         if (!res.ok) throw await errorOf(res);
         const bytes = new Uint8Array(await res.arrayBuffer());
         if (bytes.length !== expect) throw new Error('中转数据不完整');

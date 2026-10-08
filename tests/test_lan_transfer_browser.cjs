@@ -253,6 +253,17 @@ assert got == json.loads(sys.argv[2]), got
     const uploads = await alice.page.evaluate(() => window.__uploads);
     assert.equal(uploads.peak, 2, '应有两块在途上传且不超过窗口');
     assert.equal(uploads.retried, true);
+    // 固定复现竞态：取消信令比 rclose 清理分块晚 800ms 到达。
+    await carol.page.evaluate(() => {
+      const original = window.fetch;
+      window.fetch = async function (url, opts) {
+        if (typeof opts?.body === 'string') {
+          const body = JSON.parse(opts.body);
+          if (body.a === 'send' && body.d?.t === 'cancel') await new Promise(resolve => setTimeout(resolve, 800));
+        }
+        return original.call(this, url, opts);
+      };
+    });
     await offer(alice, carol, [{ name: 'relay-cancel.bin', data: crypto.randomBytes(12 * 1024 * 1024) }]);
     await (await prompt(carol, alice)).locator('.btn.primary').click();
     await carol.page.waitForFunction(() => {
