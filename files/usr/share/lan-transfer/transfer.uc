@@ -16,9 +16,11 @@ const MAX_BUFFERED = 8388608; // 请求正文、待中转上传、慢下载合�
 let clients = [], buffered = 0;
 const chunks = {};
 function millis() { let t = clock(true); return t[0] * 1000 + t[1] / 1000000; }
+// 地址用对象形式：ucode 解析 "IP:端口" 字符串时结尾 NUL 错位一字节，会随机报「Unable to parse IP address」。
+// 对象形式的空地址会绑定 0.0.0.0（含 WAN），所以先确认 addr 非空。
 const listener = socket.create(socket.AF_INET, socket.SOCK_STREAM | socket.SOCK_NONBLOCK);
-if (!listener || !listener.setopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, true)
-    || !listener.bind(addr + ':' + requested_port) || !listener.listen(MAX_CLIENTS))
+if (!addr || !listener || !listener.setopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, true)
+    || !listener.bind({ family: socket.AF_INET, address: addr, port: requested_port }) || !listener.listen(MAX_CLIENTS))
 	die('lan-transfer: bind failed: ' + socket.error() + '\n');
 const port = listener.sockname().port;
 const assets = {};

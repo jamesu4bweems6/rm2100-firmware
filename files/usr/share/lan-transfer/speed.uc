@@ -14,8 +14,10 @@ const MAX_CLIENTS = 16;
 let block = chr(0);
 while (length(block) < BLOCK) block += block;
 let clients = [];
+// 地址用对象形式：ucode 解析 "IP:端口" 字符串时结尾 NUL 错位一字节，会随机报「Unable to parse IP address」。
+// 对象形式的空地址会绑定 0.0.0.0（含 WAN），所以先确认 addr 非空。
 const listener = socket.create(socket.AF_INET, socket.SOCK_STREAM | socket.SOCK_NONBLOCK);
-if (!listener || !listener.bind(addr + ':0') || !listener.listen(MAX_CLIENTS))
+if (!addr || !listener || !listener.bind({ family: socket.AF_INET, address: addr, port: 0 }) || !listener.listen(MAX_CLIENTS))
 	die('lan-speed: bind failed: ' + socket.error() + '\n');
 const port = listener.sockname().port;
 const info = { address: addr, port: port, webport: int(webport), chunk: CHUNK, pid: int(readlink('/proc/self')) };

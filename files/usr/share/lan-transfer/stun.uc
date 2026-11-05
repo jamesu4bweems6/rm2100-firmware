@@ -56,8 +56,10 @@ function answer(req, ip, rport) {
 	return msg + be16(0x8028) + be16(4) + be32(crc32(msg) ^ 0x5354554e);
 }
 
+// 地址用对象形式：ucode 解析 "IP:端口" 字符串时结尾 NUL 错位一字节，会随机解析失败。
+// 对象形式的空地址会绑定 0.0.0.0（含 WAN），所以先确认 addr 非空。
 let sock = socket.create(socket.AF_INET, socket.SOCK_DGRAM);
-if (sock == null || !sock.bind(addr + ':' + port)) {
+if (!addr || sock == null || !sock.bind({ family: socket.AF_INET, address: addr, port: port })) {
 	warn(sprintf('lan-transfer-stun: cannot bind %s:%d: %s\n', addr, port, socket.error()));
 	exit(1);
 }
