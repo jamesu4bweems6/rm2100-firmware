@@ -72,17 +72,24 @@ async function stopped(page) {
     console.log('PASS 单设备真实 HTTP 双向测速、实际上传确认、单位换算、测量时长与同源请求');
 
     // 测量中取消，并立即重新开始：旧请求不得污染新的结果。
+    // 停止用例改用 15 秒：CI 上原生 ucode 收发占满 CPU 时浏览器帧会延迟，Playwright 点击前要等
+    // 两帧稳定，3 秒窗口可能在点击生效前就已测完（页面状态为 done），导致误报超时。
+    await page.locator('#speed-duration').selectOption('15');
     await page.locator('#speed-start').click();
     await page.waitForFunction(() => document.querySelector('#speed-status').textContent.includes('正在测试下载'));
     await page.locator('#speed-stop').click();
     await stopped(page);
+    await page.locator('#speed-duration').selectOption('3');
     await page.locator('#speed-start').click();
     await done(page);
     console.log('PASS 下载中停止后可立即重新完成测速');
+    await page.locator('#speed-duration').selectOption('15');
     await page.locator('#speed-start').click();
-    await page.waitForFunction(() => document.querySelector('#speed-status').textContent.includes('正在测试上传'));
+    await page.waitForFunction(() => document.querySelector('#speed-status').textContent.includes('正在测试上传'),
+      null, { timeout: 45000 });
     await page.locator('#speed-stop').click();
     await stopped(page);
+    await page.locator('#speed-duration').selectOption('3');
     console.log('PASS 上传中停止会清除部分结果并恢复按钮');
 
     await page.route('**/speed?a=upload', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{"bytes":1}' }));
