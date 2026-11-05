@@ -8,6 +8,7 @@ const base = process.env.LAN_TRANSFER_URL || 'http://127.0.0.1:8765/';
 let origin = new URL(base).origin;
 const shots = process.env.LAN_TRANSFER_SCREENSHOTS;
 const errors = [], requests = [];
+let current = null;
 const MiB = 1048576;
 
 async function done(page) {
@@ -27,6 +28,7 @@ async function stopped(page) {
     // 在不支持 WebRTC 的浏览器中也必须可以直接测路由器。
     await context.addInitScript(() => { delete window.RTCPeerConnection; });
     const page = await context.newPage();
+    current = page;
     page.on('pageerror', e => errors.push(e.message));
     page.on('request', r => requests.push(r.url()));
     await page.goto(base);
@@ -105,5 +107,15 @@ async function stopped(page) {
     console.log('PASS 手机深色页面布局无横向溢出');
     assert.equal(requests.filter(url => /^https?:/.test(url) && ![origin, new URL(base).origin].includes(new URL(url).origin)).length, 0);
     assert.deepEqual(errors, [], '浏览器 JavaScript 错误');
+  } catch (e) {
+    // 失败时打印页面上的测速状态，区分「提前完成」与「请求报错」
+    if (current) {
+      const state = await current.evaluate(() => ({
+        panel: document.querySelector('#speed-panel')?.dataset.state,
+        status: document.querySelector('#speed-status')?.textContent
+      })).catch(() => null);
+      console.error('测速页面状态：', JSON.stringify(state), '最近请求：', requests.slice(-8));
+    }
+    throw e;
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });
