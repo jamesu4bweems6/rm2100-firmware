@@ -6,7 +6,7 @@ on:
       app_version:
         description: "App version (CFBundleShortVersionString)"
         required: false
-        default: "1.0.0"
+        default: "1.0.1"
   push:
     paths:
       - "ios/**"
@@ -59,7 +59,7 @@ jobs:
       - name: Build unsigned IPA
         working-directory: ios
         run: |
-          VER="${{ github.event.inputs.app_version || '1.0.0' }}"
+          VER="${{ github.event.inputs.app_version || '1.0.1' }}"
           set -o pipefail
           xcodebuild build -project RemoteWOL.xcodeproj -scheme RemoteWOL -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/release \

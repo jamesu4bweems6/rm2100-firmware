@@ -9,6 +9,13 @@ const path = require('node:path');
 const WEB = path.join(__dirname, '..', 'files', 'www', 'remote-wol');
 const W = require(path.join(WEB, 'bemfa.js'));
 const UID = '0123456789abcdef0123456789abcdef';
+// 巴法云 allTopic 的真实返回格式（2026-11-05 实测，主题名已替换）
+const REAL_ALLTOPIC = { code: 0, message: 'OK', data: { data: [{
+  topic: 'Ab12Cd34E006', type: 3, share: false, time: '2026-11-05 13:37:10', unix: 1793857030, online: true, name: '电脑',
+  room: '', msg: 'on', pubOnline: false, deviceType: 'switch', group: '', createTime: '2026-11-05 13:36:07'
+}] } };
+// 浏览器测试的接口模拟按真实格式包一层
+const wrap = list => ({ code: 0, message: 'OK', data: { data: list } });
 
 function fakeFetch(routes, calls) {
   return async (url, init) => {
@@ -40,6 +47,12 @@ async function unit() {
     { topic: 'nas', name: '', msg: '', online: false, unix: null }
   ]);
   assert.match(calls[0].url, /\/vb\/api\/v2\/allTopic\?openID=0123456789abcdef0123456789abcdef&type=3$/);
+  // 2026-11-05 实测的真实返回（主题名已替换）：data 里还包着一层 data，与官方文档示例不同
+  const real = await W.listTopics(UID, W.TCP, fakeFetch([['allTopic', REAL_ALLTOPIC]]));
+  assert.deepEqual(real, [{ topic: 'Ab12Cd34E006', name: '电脑', msg: 'on', online: true, unix: 1793857030 }]);
+  assert.deepEqual(W.diagnose(real, []).map(i => i.level), ['ok'], '真实格式下设置正确的账号不能误报');
+  assert.deepEqual(await W.listTopics(UID, W.TCP, fakeFetch([['allTopic', { code: 0, data: { data: [] } }]])), []);
+  assert.deepEqual(await W.listTopics(UID, W.TCP, fakeFetch([['allTopic', { code: 0, data: '' }]])), []);
   await assert.rejects(W.listTopics(UID, W.TCP, fakeFetch([['allTopic', { code: -1, msg: '获取失败' }]])), /私钥不正确/);
   await assert.rejects(W.listTopics(UID, W.TCP, fakeFetch([])), /连不上巴法云/);
   await assert.rejects(W.listTopics('bad uid', W.TCP, fakeFetch([])), /私钥/);
@@ -105,11 +118,11 @@ async function browser() {
         return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'POST' } });
       if (url.pathname === '/vb/api/v2/allTopic') {
         if (url.searchParams.get('openID') !== UID) return json({ code: -1, msg: '获取失败', data: '' });
-        if (url.searchParams.get('type') === '1') return json({ code: 0, data: [{ topic: 'light002', msg: 'off' }] });
-        return json({ code: 0, data: [
+        if (url.searchParams.get('type') === '1') return json(wrap([{ topic: 'light002', msg: 'off' }]));
+        return json(wrap([
           { topic: 'pc001', name: '书房电脑', msg: state, online: true, unix: Math.floor(Date.now() / 1000) - 30 },
           { topic: 'nas', name: '<img src=x onerror=alert(1)>', msg: 'off', online: false, unix: 0 }
-        ] });
+        ]));
       }
       if (url.pathname === '/va/postJsonMsg') {
         posts.push(JSON.parse(route.request().postData()));
@@ -198,7 +211,7 @@ async function luci(b, base) {
     const data = url.searchParams.get('type') === '3'
       ? [{ topic: 'pc001', name: '电脑', msg: 'off', online: true }]
       : [];
-    route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ code: 0, data }) });
+    route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(wrap(data)) });
   });
   await page.goto(base + 'index.html');
   await page.evaluate(() => { document.body.replaceChildren(); delete window.RemoteWol; });

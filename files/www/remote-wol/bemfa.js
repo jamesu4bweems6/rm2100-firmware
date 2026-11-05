@@ -39,7 +39,15 @@
     const url = API + '/vb/api/v2/allTopic?openID=' + encodeURIComponent(uid) + '&type=' + (type || TCP);
     const data = await getJson(fetcher || fetch, url);
     if (data.code !== 0) throw new Error(data.code === -1 ? '获取主题失败：私钥不正确，或这个云里还没有主题' : (data.msg || data.message || '获取主题失败'));
-    return (Array.isArray(data.data) ? data.data : []).map(normalize).filter(t => t.topic);
+    return topicList(data).map(normalize).filter(t => t.topic);
+  }
+
+  // 实际返回是 {"code":0,"data":{"data":[…]}}，比官方文档示例多包一层；两种都接受
+  function topicList(data) {
+    const raw = data && data.data;
+    if (Array.isArray(raw)) return raw;
+    if (raw && Array.isArray(raw.data)) return raw.data;
+    return [];
   }
 
   function normalize(t) {
@@ -102,7 +110,7 @@
     }
     if (mijia) {
       add(items.some(i => i.level === 'error') ? 'info' : 'ok',
-        '有 ' + mijia + ' 个主题符合米家同步规则。若米家里仍看不到：米家 App →「我的」→「其他平台设备」（新版为「连接其他平台」）→「巴法」→「同步设备」；同步来的设备可能只出现在「巴法」这个列表里，不在首页。新建或改名主题后都要重新同步，仍不行就解绑巴法后重新绑定。');
+        '有 ' + mijia + ' 个主题符合米家同步规则。若米家里仍看不到：米家 App →「我的」→「其他平台设备」（新版为「连接其他平台」）→「巴法」→「同步设备」；同步来的设备可能只出现在「巴法」这个列表里，不在首页。新建或改名主题后都要重新同步。还要确认米家里登录的巴法账号就是这个私钥所属的账号：手机号登录和微信登录可能是两个不同的巴法账号。仍不行就解绑巴法后重新绑定。');
     }
     return items;
   }

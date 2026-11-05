@@ -100,6 +100,17 @@ final class RemoteWOLTests: XCTestCase {
         XCTAssertEqual(query.first { $0.name == "openID" }?.value, uid)
         XCTAssertEqual(query.first { $0.name == "type" }?.value, "3")
 
+        // 2026-11-05 实测的真实返回（主题名已替换）：data 里还包着一层 data，与官方文档示例不同
+        StubProtocol.handler = { _, _ in
+            (200, Data(#"{"code":0,"message":"OK","data":{"data":[{"topic":"Ab12Cd34E006","type":3,"share":false,"time":"2026-11-05 13:37:10","unix":1793857030,"online":true,"name":"电脑","room":"","msg":"on","pubOnline":false,"deviceType":"switch","group":"","createTime":"2026-11-05 13:36:07"}]}}"#.utf8))
+        }
+        let real = try await client().listTopics(uid: uid)
+        XCTAssertEqual(real, [BemfaTopic(topic: "Ab12Cd34E006", name: "电脑", msg: "on", online: true, unix: 1793857030)])
+        XCTAssertEqual(Diagnostics.run(tcp: real, mqtt: []).map(\.level), [.ok], "真实格式下设置正确的账号不能误报")
+        StubProtocol.handler = { _, _ in (200, Data(#"{"code":0,"data":{"data":[]}}"#.utf8)) }
+        let empty = try await client().listTopics(uid: uid)
+        XCTAssertTrue(empty.isEmpty)
+
         StubProtocol.handler = { _, _ in (200, Data(#"{"code":-1,"msg":"获取失败","data":""}"#.utf8)) }
         do { _ = try await client().listTopics(uid: uid); XCTFail("应当报错") } catch {
             XCTAssertTrue(error.localizedDescription.contains("私钥不正确"))

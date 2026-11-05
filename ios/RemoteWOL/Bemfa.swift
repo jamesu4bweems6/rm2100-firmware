@@ -124,8 +124,14 @@ struct Bemfa {
             if code == -1 { throw BemfaError.server("获取主题失败：私钥不正确，或这个云里还没有主题") }
             throw BemfaError.server((object["msg"] as? String) ?? (object["message"] as? String) ?? "获取主题失败（\(code)）")
         }
-        let list = object["data"] as? [[String: Any]] ?? []
-        return list.compactMap(BemfaTopic.init(json:))
+        return Bemfa.topicList(object).compactMap(BemfaTopic.init(json:))
+    }
+
+    /// 实际返回是 {"code":0,"data":{"data":[…]}}，比官方文档示例多包一层；两种都接受
+    static func topicList(_ object: [String: Any]) -> [[String: Any]] {
+        if let list = object["data"] as? [[String: Any]] { return list }
+        if let inner = object["data"] as? [String: Any], let list = inner["data"] as? [[String: Any]] { return list }
+        return []
     }
 
     /// 向主题发 on：路由器收到后唤醒对应电脑
