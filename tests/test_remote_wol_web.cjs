@@ -53,6 +53,14 @@ async function unit() {
   assert.deepEqual(W.diagnose(real, []).map(i => i.level), ['ok'], '真实格式下设置正确的账号不能误报');
   assert.deepEqual(await W.listTopics(UID, W.TCP, fakeFetch([['allTopic', { code: 0, data: { data: [] } }]])), []);
   assert.deepEqual(await W.listTopics(UID, W.TCP, fakeFetch([['allTopic', { code: 0, data: '' }]])), []);
+  // 单独复核主题是否存在
+  const probes = [];
+  assert.equal(await W.topicExists(UID, 'pc001', fakeFetch([['getmsg', { code: 0, message: 'OK', data: [{ msg: 'on' }] }]], probes)), true);
+  assert.equal(probes[0].url, `https://apis.bemfa.com/va/getmsg?uid=${UID}&topic=pc001&type=3`);
+  assert.equal(await W.topicExists(UID, 'ghost001', fakeFetch([['getmsg', { code: 40004, message: 'Uid or topic err' }]])), false);
+  assert.equal(await W.topicExists(UID, 'pc001', fakeFetch([])), null, '网络错误时不下结论');
+  assert.equal(await W.topicExists(UID, 'pc/001', fakeFetch([])), false);
+  assert.equal(W.VERSION, 3);
   await assert.rejects(W.listTopics(UID, W.TCP, fakeFetch([['allTopic', { code: -1, msg: '获取失败' }]])), /私钥不正确/);
   await assert.rejects(W.listTopics(UID, W.TCP, fakeFetch([])), /连不上巴法云/);
   await assert.rejects(W.listTopics('bad uid', W.TCP, fakeFetch([])), /私钥/);
@@ -201,23 +209,34 @@ async function browser() {
 
 // LuCI 页面的开机卡片与「检查巴法云」：在真实浏览器里用最小桩函数加载视图源码
 async function luci(b, base) {
-  const VIEW = fs.readFileSync(path.join(__dirname, '..', 'files', 'www', 'luci-static', 'resources', 'view', 'remote-wol.js'), 'utf8');
+  const VIEW = fs.readFileSync(path.join(__dirname, '..', 'files', 'www', 'luci-static', 'resources', 'view', 'remote-wol-v3.js'), 'utf8');
+  const BEMFA = fs.readFileSync(path.join(WEB, 'bemfa.js'), 'utf8');
   const context = await b.newContext();
   const page = await context.newPage();
-  const errors = [];
+  const errors = [], scripts = [];
   page.on('pageerror', e => errors.push(e.message));
+  page.on('request', r => { if (r.url().includes('/remote-wol/bemfa.js')) scripts.push(r.url()); });
+  let mode = 'normal';
   await context.route('https://apis.bemfa.com/**', route => {
     const url = new URL(route.request().url());
-    const data = url.searchParams.get('type') === '3'
-      ? [{ topic: 'pc001', name: '电脑', msg: 'off', online: true }]
-      : [];
-    route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(wrap(data)) });
+    const reply = body => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(body) });
+    if (url.pathname === '/va/getmsg') {
+      // 单独复核：hidden006 存在（列表里却没有），其余不存在
+      const topic = url.searchParams.get('topic');
+      return reply(topic === 'hidden006' || topic === 'pc001' ? { code: 0, message: 'OK', data: [{ msg: 'on' }] } : { code: 40004, message: 'Uid or topic err', data: null });
+    }
+    if (mode === 'listfail' && url.searchParams.get('type') === '3') return reply({ code: -1, msg: '获取失败', data: '' });
+    reply(wrap(url.searchParams.get('type') === '3' ? [{ topic: 'pc001', name: '电脑', msg: 'off', online: true }] : []));
   });
+  // 模拟浏览器缓存里的 v2.14.0 旧脚本：没有 VERSION
+  await context.route('**/remote-wol/bemfa.js*', route => mode === 'stale'
+    ? route.fulfill({ status: 200, contentType: 'text/javascript', body: BEMFA.replace(/VERSION, /, '') })
+    : route.continue());
   await page.goto(base + 'index.html');
-  await page.evaluate(() => { document.body.replaceChildren(); delete window.RemoteWol; });
-  const result = await page.evaluate(async source => {
+  await page.evaluate(() => {
+    document.body.replaceChildren();
     String.prototype.format = function () { let i = 0; const a = arguments; return this.replace(/%s/g, () => String(a[i++])); };
-    const E = (tag, attrs, children) => {
+    window.E = (tag, attrs, children) => {
       if (Array.isArray(tag)) { const f = document.createDocumentFragment(); tag.forEach(c => f.append(c)); (attrs || []).forEach(c => f.append(c)); return f; }
       if (Array.isArray(attrs) || typeof attrs === 'string') { children = attrs; attrs = {}; }
       const el = document.createElement(tag);
@@ -225,23 +244,36 @@ async function luci(b, base) {
       for (const c of [].concat(children == null ? [] : children)) el.append(c instanceof Node ? c : String(c));
       return el;
     };
-    const conf = {
-      main: { '.name': 'main', '.type': 'remote-wol', uid: '0123456789abcdef0123456789abcdef', enabled: '1' },
-      h1: { '.name': 'h1', '.type': 'host', name: '书房电脑', mac: 'AA:BB:CC:DD:EE:01', topic: 'pc001' },
-      h2: { '.name': 'h2', '.type': 'host', name: '<b>NAS</b>', mac: 'AA:BB:CC:DD:EE:02', topic: 'ghost001' },
-      h3: { '.name': 'h3', '.type': 'host', name: '停用', mac: 'AA:BB:CC:DD:EE:03', topic: 'off001', enabled: '0' }
+    window.makeView = source => {
+      const conf = window.conf = {
+        main: { '.name': 'main', '.type': 'remote-wol', uid: '0123456789abcdef0123456789abcdef', enabled: '1' },
+        h1: { '.name': 'h1', '.type': 'host', name: '书房电脑', mac: 'AA:BB:CC:DD:EE:01', topic: 'pc001' },
+        h2: { '.name': 'h2', '.type': 'host', name: '<b>NAS</b>', mac: 'AA:BB:CC:DD:EE:02', topic: 'ghost001' },
+        h3: { '.name': 'h3', '.type': 'host', name: '停用', mac: 'AA:BB:CC:DD:EE:03', topic: 'off001', enabled: '0' },
+        h4: { '.name': 'h4', '.type': 'host', name: '客厅', mac: 'AA:BB:CC:DD:EE:04', topic: 'hidden006' }
+      };
+      const uci = {
+        get: (c, s, o) => (conf[s] || {})[o],
+        sections: (c, type, cb) => { const r = Object.values(conf).filter(s => s['.type'] === type); if (cb) r.forEach(cb); return r; }
+      };
+      window.execs = []; window.notes = [];
+      const fs = { exec: (cmd, args) => { window.execs.push([cmd, args]); return Promise.resolve({ code: 0 }); }, read: () => Promise.resolve(null) };
+      const ui = { addNotification: (t, el, level) => window.notes.push([level, el.textContent]) };
+      const L = { resolveDefault: (p, d) => Promise.resolve(p).catch(() => d), env: {} };
+      return new Function('view', 'form', 'uci', 'rpc', 'fs', 'ui', 'poll', 'E', '_', 'L', source)(
+        { extend: o => o }, {}, uci, { declare: () => () => Promise.resolve({}) }, fs, ui, { add() {} }, window.E, s => s, L);
     };
-    const uci = {
-      get: (c, s, o) => (conf[s] || {})[o],
-      sections: (c, type, cb) => { const r = Object.values(conf).filter(s => s['.type'] === type); if (cb) r.forEach(cb); return r; }
+    window.check = async source => {
+      delete window.RemoteWol;
+      const view = window.makeView(source);
+      const box = document.createElement('ul'), btn = document.createElement('button');
+      await view.checkBemfa(box, btn);
+      return { diag: [...box.querySelectorAll('li')].map(li => li.textContent), disabled: btn.disabled };
     };
-    const execs = [], notes = [];
-    const fs = { exec: (cmd, args) => { execs.push([cmd, args]); return Promise.resolve({ code: 0 }); }, read: () => Promise.resolve(null) };
-    const ui = { addNotification: (t, el, level) => notes.push([level, el.textContent]) };
-    const L = { resolveDefault: (p, d) => Promise.resolve(p).catch(() => d), env: {} };
-    const view = new Function('view', 'form', 'uci', 'rpc', 'fs', 'ui', 'poll', 'E', '_', 'L', source)(
-      { extend: o => o }, {}, uci, { declare: () => () => Promise.resolve({}) }, fs, ui, { add() {} }, E, s => s, L);
+  });
 
+  const result = await page.evaluate(async source => {
+    const view = window.makeView(source);
     const status = { running: true, status: { sync: true, topics: ['pc001', 'ghost001'], hosts: {
       pc001: { online: true, ip: '192.168.1.20' }, ghost001: { online: false, ip: null } } } };
     const table = view.renderPower(status);
@@ -251,14 +283,9 @@ async function luci(b, base) {
     await new Promise(r => setTimeout(r, 50));
     const noSync = view.renderPower({ running: true, status: { sync: false } }).textContent;
     const stopped = view.renderPower({ running: false, status: null }).textContent;
-
-    const box = document.createElement('ul'), btn = document.createElement('button');
-    await view.checkBemfa(box, btn);
-    const diag = [...box.querySelectorAll('li')].map(li => li.textContent);
-    return { rows, execs, notes, noSync, stopped, diag, html: table.innerHTML, disabled: btn.disabled };
+    return { rows, execs: window.execs, notes: window.notes, noSync, stopped, html: table.innerHTML };
   }, VIEW);
-
-  assert.equal(result.rows.length, 2, '停用的电脑不显示');
+  assert.equal(result.rows.length, 3, '停用的电脑不显示');
   assert.match(result.rows[0], /书房电脑已开机（192\.168\.1\.20）AA:BB:CC:DD:EE:01开机/);
   assert.match(result.rows[1], /<b>NAS<\/b>已关机/);
   assert.doesNotMatch(result.html, /<b>NAS<\/b>/, '名称按文本显示');
@@ -267,12 +294,32 @@ async function luci(b, base) {
   assert.match(result.notes[0][1], /已向“书房电脑”（AA:BB:CC:DD:EE:01）发送开机魔术包/);
   assert.match(result.noSync, /未开启状态同步/);
   assert.match(result.stopped, /未知/);
-  assert.match(result.diag[0], /路由器里填的主题 ghost001 在巴法云“TCP 设备云”里不存在/);
-  assert.ok(result.diag.some(t => /同步设备/.test(t)), result.diag.join('\n'));
-  assert.ok(!result.diag.some(t => /off001/.test(t)), '停用的电脑不参与检查');
-  assert.equal(result.disabled, false, '检查结束后恢复按钮');
+  console.log('PASS LuCI：开机卡片状态与本地开机、停用电脑隐藏、名称不当 HTML');
+
+  const normal = await page.evaluate(source => window.check(source), VIEW);
+  const text = normal.diag.join('\n');
+  assert.match(text, /路由器里填的主题 ghost001 在巴法云“TCP 设备云”里不存在/);
+  assert.match(text, /主题 hidden006 存在，但没出现在巴法云主题列表接口的结果里/, '列表里没有但单独查得到的主题不能报不存在');
+  assert.doesNotMatch(text, /hidden006 在巴法云“TCP 设备云”里不存在/);
+  assert.doesNotMatch(text, /pc001 在巴法云/);
+  assert.match(text, /同步设备/);
+  assert.match(text, /诊断脚本版本 3/);
+  assert.doesNotMatch(text, /off001/, '停用的电脑不参与检查');
+  assert.equal(normal.disabled, false, '检查结束后恢复按钮');
+  assert.ok(scripts.length && scripts.every(u => /bemfa\.js\?t=\d+$/.test(u)), '每次带时间戳加载诊断脚本，避开浏览器缓存：' + scripts.join(' '));
+
+  mode = 'listfail';
+  const failed = (await page.evaluate(source => window.check(source), VIEW)).diag.join('\n');
+  assert.match(failed, /查询巴法云主题列表失败：获取主题失败/, '列表查询失败要如实显示');
+  assert.match(failed, /主题 pc001 存在/, '列表失败时用单独查询确认主题存在');
+  assert.doesNotMatch(failed, /pc001 在巴法云“TCP 设备云”里不存在/);
+  assert.doesNotMatch(failed, /没有查到主题/, '查询失败不能当成没有主题');
+
+  mode = 'stale';
+  const stale = (await page.evaluate(source => window.check(source), VIEW)).diag.join('\n');
+  assert.match(stale, /旧版诊断脚本，请按 Ctrl\+F5/);
   assert.deepEqual(errors, []);
-  console.log('PASS LuCI：开机卡片状态与本地开机、停用电脑隐藏、名称不当 HTML、检查巴法云发现未建主题');
+  console.log('PASS LuCI：检查巴法云——不存在的主题报错、列表漏掉的主题经复核不误报、列表失败如实显示、旧缓存脚本提示刷新、带时间戳加载');
   await context.close();
 }
 

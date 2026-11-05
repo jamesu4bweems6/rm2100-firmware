@@ -23,7 +23,7 @@ INIT = ROOT / 'files/etc/init.d/remote-wol'
 DEFAULTS = ROOT / 'files/etc/uci-defaults/90-remote-wol'
 DAEMON = ROOT / 'files/usr/share/remote-wol/bemfa.uc'
 WAKE = ROOT / 'files/usr/share/remote-wol/wake'
-VIEW = ROOT / 'files/www/luci-static/resources/view/remote-wol.js'
+VIEW = ROOT / 'files/www/luci-static/resources/view/remote-wol-v3.js'
 ACL = ROOT / 'files/usr/share/rpcd/acl.d/luci-app-remote-wol.json'
 MENU = ROOT / 'files/usr/share/luci/menu.d/luci-app-remote-wol.json'
 UCITRACK = ROOT / 'files/usr/share/ucitrack/remote-wol.json'
@@ -455,7 +455,14 @@ class FileTests(unittest.TestCase):
         self.assertEqual(acl['read']['file'], {'/tmp/remote-wol/status.json': ['read']})
         self.assertIn("fs.exec('/usr/share/remote-wol/wake', [ mac ])", view)
         self.assertIn("fs.read('/tmp/remote-wol/status.json')", view)
-        self.assertEqual(json.loads(MENU.read_text(encoding='utf-8'))['admin/services/remote-wol']['action']['path'], 'remote-wol')
+        # 固件内文件的修改时间固定为 OpenWrt 发布日期、LuCI 视图地址的 ?v= 也不随本固件变，
+        # 浏览器会长期使用缓存里的旧视图；视图改动时必须换文件名，菜单指向新文件，且不留旧文件
+        path = json.loads(MENU.read_text(encoding='utf-8'))['admin/services/remote-wol']['action']['path']
+        self.assertEqual(ROOT / f'files/www/luci-static/resources/view/{path}.js', VIEW)
+        views = sorted(p.name for p in (ROOT / 'files/www/luci-static/resources/view').glob('remote-wol*.js'))
+        self.assertEqual(views, [VIEW.name])
+        version = re.search(r'var BEMFA_VERSION = (\d+);', view)[1]
+        self.assertEqual(VIEW.name, f'remote-wol-v{version}.js', '视图文件名带诊断脚本版本，改动时一起升级')
 
     def test_paths_are_consistent(self):
         daemon = DAEMON.read_text(encoding='utf-8')
@@ -484,7 +491,10 @@ class FileTests(unittest.TestCase):
 
     def test_web_page_assets(self):
         html = (self.WEB / 'index.html').read_text(encoding='utf-8')
-        self.assertEqual(re.findall(r'<script src="([^"]+)"', html), ['bemfa.js', 'app.js'])
+        version = re.search(r'const VERSION = (\d+);', (self.WEB / 'bemfa.js').read_text(encoding='utf-8'))[1]
+        # 脚本地址带版本号，固件升级后浏览器不会继续用缓存里的旧脚本
+        self.assertEqual(re.findall(r'<script src="([^"]+)"', html), [f'bemfa.js?v={version}', f'app.js?v={version}'])
+        self.assertIn(f'var BEMFA_VERSION = {version};', VIEW.read_text(encoding='utf-8'), 'LuCI 要求的诊断脚本版本与实际一致')
         # 网页只允许连巴法云，脚本只能来自同源
         csp = re.search(r'Content-Security-Policy" content="([^"]+)"', html)[1]
         self.assertIn("default-src 'self'", csp)
@@ -495,7 +505,7 @@ class FileTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
         app = (self.WEB / 'app.js').read_text(encoding='utf-8')
         self.assertNotIn('innerHTML', app, '巴法云返回的昵称必须按文本显示')
-        self.assertIn("'/remote-wol/bemfa.js'", VIEW.read_text(encoding='utf-8'), 'LuCI 与网页共用同一份诊断脚本')
+        self.assertIn("'/remote-wol/bemfa.js?t=' + Date.now()", VIEW.read_text(encoding='utf-8'), 'LuCI 与网页共用同一份诊断脚本，且每次绕过缓存加载')
 
     def test_ios_project(self):
         project = (ROOT / 'ios/project.yml').read_text(encoding='utf-8')

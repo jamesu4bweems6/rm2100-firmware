@@ -59,18 +59,28 @@ function wakeLocal(name, mac, btn) {
 	});
 }
 
-// 巴法云接口与诊断规则和手机网页共用一份：/www/remote-wol/bemfa.js
+// 巴法云接口与诊断规则和手机网页共用一份：/www/remote-wol/bemfa.js。
+// uhttpd 不给静态文件发 Cache-Control，固件升级后浏览器可能一直用缓存里的旧脚本，所以每次带时间戳加载。
+var BEMFA_VERSION = 3;
 var bemfaReady = null;
 function loadBemfa() {
 	if (!bemfaReady)
 		bemfaReady = new Promise(function(resolve, reject) {
-			if (window.RemoteWol)
+			if (window.RemoteWol && window.RemoteWol.VERSION >= BEMFA_VERSION)
 				return resolve(window.RemoteWol);
-			var script = E('script', { 'src': '/remote-wol/bemfa.js' });
-			script.onload = function() { window.RemoteWol ? resolve(window.RemoteWol) : reject(new Error(_('诊断脚本加载失败'))); };
-			script.onerror = function() { bemfaReady = null; reject(new Error(_('诊断脚本加载失败'))); };
+			var script = E('script', { 'src': '/remote-wol/bemfa.js?t=' + Date.now() });
+			script.onload = function() {
+				var W = window.RemoteWol;
+				if (!W)
+					reject(new Error(_('诊断脚本加载失败')));
+				else if (!(W.VERSION >= BEMFA_VERSION))
+					reject(new Error(_('浏览器用的是旧版诊断脚本，请按 Ctrl+F5（手机清除浏览器缓存）后重试。')));
+				else
+					resolve(W);
+			};
+			script.onerror = function() { reject(new Error(_('诊断脚本加载失败'))); };
 			document.head.appendChild(script);
-		});
+		}).catch(function(e) { bemfaReady = null; throw e; });
 	return bemfaReady;
 }
 
@@ -145,17 +155,32 @@ return view.extend({
 		btn.disabled = true;
 		show([ { level: 'info', text: _('正在查询巴法云…') } ]);
 		return loadBemfa().then(function(W) {
+			var listError = null;
 			return Promise.all([
-				W.listTopics(uid, W.TCP).catch(function(e) { if (/私钥/.test(e.message)) return []; throw e; }),
+				// 查询失败不能当成「没有主题」，否则会误报每个主题都不存在
+				W.listTopics(uid, W.TCP).catch(function(e) { listError = e; return []; }),
 				W.listTopics(uid, W.MQTT).catch(function() { return null; })
 			]).then(function(res) {
-				var items = [], names = res[0].map(function(t) { return t.topic; });
-				// 路由器订阅不会自动在控制台建主题；没建的主题米家里也不会有
-				configured.forEach(function(t) {
-					if (names.indexOf(t) < 0)
-						items.push({ level: 'error', text: _('路由器里填的主题 %s 在巴法云“TCP 设备云”里不存在：请到控制台新建同名主题，再到米家里同步设备。').format(t) });
+				var names = res[0].map(function(t) { return t.topic; }),
+				    missing = configured.filter(function(t) { return names.indexOf(t) < 0; });
+				// 列表里没有的主题再单独读一次消息复核，列表接口格式再变也不会误报
+				return Promise.all(missing.map(function(t) { return W.topicExists(uid, t); })).then(function(exists) {
+					var items = [];
+					if (listError)
+						items.push({ level: 'error', text: _('查询巴法云主题列表失败：%s').format(listError.message) });
+					missing.forEach(function(t, i) {
+						if (exists[i] === true)
+							items.push({ level: 'info', text: _('主题 %s 存在，但没出现在巴法云主题列表接口的结果里（接口格式可能有变化），不影响远程开机。').format(t) });
+						else if (exists[i] === false)
+							items.push({ level: 'error', text: _('路由器里填的主题 %s 在巴法云“TCP 设备云”里不存在，或私钥不属于这个主题所在的账号：请核对私钥，或到控制台新建同名主题，再到米家里同步设备。').format(t) });
+						else
+							items.push({ level: 'warn', text: _('无法确认主题 %s 是否存在（巴法云没有响应），请稍后重试。').format(t) });
+					});
+					if (!listError || res[0].length)
+						items = items.concat(W.diagnose(res[0], res[1]));
+					items.push({ level: 'info', text: _('诊断脚本版本 %s。').format(W.VERSION) });
+					show(items);
 				});
-				show(items.concat(W.diagnose(res[0], res[1])));
 			});
 		}).catch(function(e) {
 			show([ { level: 'error', text: e.message } ]);
@@ -292,7 +317,8 @@ return view.extend({
 					powerBox,
 					E('p', { 'class': 'cbi-section-descr' }, [
 						_('这里的“开机”直接从路由器发魔术包，不经过巴法云。人不在家时用手机打开远程开机网页：'),
-						E('a', { 'href': webUrl, 'target': '_blank', 'rel': 'noopener noreferrer' }, [ webUrl ]),
+						// 链接带版本号：网页地址一变，浏览器就不会再用缓存里的旧页面
+						E('a', { 'href': webUrl + '?v=' + BEMFA_VERSION, 'target': '_blank', 'rel': 'noopener noreferrer' }, [ webUrl ]),
 						_('（局域网内可直接打开；人在外面时用 iOS App）。')
 					])
 				]),

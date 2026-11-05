@@ -114,7 +114,8 @@
     list.replaceChildren();
     $('check').disabled = true;
     try {
-      const tcp = await W.listTopics(uid, W.TCP).catch(e => { if (/私钥/.test(e.message)) return []; throw e; });
+      // 查询失败要如实显示，不能当成「没有主题」
+      const tcp = await W.listTopics(uid, W.TCP);
       const mqtt = await W.listTopics(uid, W.MQTT).catch(() => null);
       for (const item of W.diagnose(tcp, mqtt)) {
         const li = document.createElement('li');

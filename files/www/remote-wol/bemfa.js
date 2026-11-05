@@ -7,6 +7,8 @@
   else root.RemoteWol = api;
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
+  // 脚本版本：页面据此判断浏览器是否还在用缓存里的旧脚本（固件升级后 uhttpd 不发 Cache-Control）
+  const VERSION = 3;
   const API = 'https://apis.bemfa.com';
   const TCP = 3;    // 路由器连的是 bemfa.com:8344，对应接口里的 type=3
   const MQTT = 1;
@@ -48,6 +50,20 @@
     if (Array.isArray(raw)) return raw;
     if (raw && Array.isArray(raw.data)) return raw.data;
     return [];
+  }
+
+  // 单独确认某个主题是否存在：读它的最后一条消息。主题列表接口格式变化时用它复核，避免误报「不存在」。
+  // 返回 true（存在）、false（巴法云明确说主题或私钥不对）、null（查不到结论，例如网络错误）
+  async function topicExists(uid, topic, fetcher) {
+    if (!validUid(uid) || !/^[A-Za-z0-9]{1,64}$/.test(topic || '')) return false;
+    try {
+      const data = await getJson(fetcher || fetch, API + '/va/getmsg?uid=' + encodeURIComponent(uid) + '&topic=' + encodeURIComponent(topic) + '&type=' + TCP);
+      if (data.code === 0) return true;
+      if (data.code === 40004) return false;
+      return null;
+    } catch (e) {
+      return null;
+    }
   }
 
   function normalize(t) {
@@ -115,5 +131,5 @@
     return items;
   }
 
-  return { API, TCP, MQTT, KINDS, miKind, validUid, listTopics, wake, powerState, diagnose, normalize };
+  return { VERSION, API, TCP, MQTT, KINDS, miKind, validUid, listTopics, topicExists, wake, powerState, diagnose, normalize, topicList };
 });

@@ -3,7 +3,7 @@
 红米 RM AC2100（MediaTek MT7621A，128MB RAM / 16MB flash）专用 OpenWrt 固件，
 内置**校园网多设备检测规避**套件，通过 GitHub Actions 云端构建，本机无需 Linux 环境。
 
-**当前固件版本：v2.14.1**（刷入后 `cat /etc/campus-fix-version` 查询；LuCI 页脚也显示 `campus-fix vX.Y.Z`）
+**当前固件版本：v2.14.2**（刷入后 `cat /etc/campus-fix-version` 查询；LuCI 页脚也显示 `campus-fix vX.Y.Z`）
 
 **内网文件互传「邻传」**：连在这台路由器上的手机、电脑用浏览器打开 `http://路由器LAN地址:8080/`（默认 [192.168.1.1:8080](http://192.168.1.1:8080/)）就能互相看到，直接发文件和文字，不用装应用、不用登录后台、不经过外网。详见下方「内网文件互传」一节和 [使用、安装与验证说明](docs/lan-transfer.md)。
 
@@ -127,7 +127,7 @@
 ## 使用方法
 
 1. **构建**：本仓库已配好 Actions。进 **Actions → Build RM AC2100 OpenWrt
-   firmware → Run workflow**，默认参数（24.10.2 + LuCI + Argon 主题 + 简体中文 + v2.14.1）直接 Run，
+   firmware → Run workflow**，默认参数（24.10.2 + LuCI + Argon 主题 + 简体中文 + v2.14.2）直接 Run，
    约 3-5 分钟出包。可调输入：
    - `openwrt_version`：OpenWrt 底包版本
    - `include_luci`：是否带 LuCI（false = 纯 CLI，省内存）
@@ -159,7 +159,7 @@
 ## 首次进系统检查清单
 
 ```
-cat /etc/campus-fix-version        # 应显示 2.14.1
+cat /etc/campus-fix-version        # 应显示 2.14.2
 nft list chain inet fw4 campus_ttl_postrouting     # counter 在涨 = TTL 归一生效
 nft list chain inet fw4 campus_quic_block          # drop 在涨 = 有客户端试图 QUIC
 nft list chain inet fw4 campus_leak_block          # 发现协议封锁生效
@@ -291,6 +291,7 @@ files/
 | v2.13.0 | 新增远程开机：路由器无公网 IP 时主动连巴法云 TCP 长连接订阅主题，收到 `on` 用 etherwake 向 LAN 广播魔术包；支持巴法云 App/小程序与米家（小爱同学「打开电脑」），最多 8 台电脑；米家状态同步：每 30 秒 ARP 探测电脑是否在线，经 `/up` 把真实开关状态写回云端（指令后 3 分钟宽限期）；订阅不拉历史消息防误开机、5 秒去重、心跳/超时/指数退避重连；LuCI「服务 → 远程开机」含本地「立即唤醒」与运行状态，ACL 只放行唤醒脚本；新增 etherwake 包。邻传中转改为常驻 ucode HTTP 服务（缺 socket 时回退 CGI）。init/唤醒脚本 shell 实跑，守护进程在 CI 原生 ucode 对假巴法云服务器测试；尚未在真机与真实巴法云服务上验证。 |
 | v2.14.0 | 远程开机：LuCI 页面顶部新增「开机」卡片，每台电脑显示开/关机状态与 IP，一键从路由器发魔术包；新增手机网页 `/remote-wol/`（直接调用巴法云接口，查看状态、发送开机指令）；新增 iOS App「远程开机」（SwiftUI，钥匙串存私钥，Siri「用远程开机打开电脑」，Actions 在模拟器跑单元测试后输出未签名 IPA）；LuCI、网页、App 都有「检查巴法云」，排查米家里看不到设备的原因（主题后缀、未建主题、建错云、昵称、路由器未订阅）。修复网页发送开机后提示被刷新清掉的问题。网页与 LuCI 卡片经真实 Chromium 测试；尚未在真机、真实巴法云与 iPhone 上验证。 |
 | v2.14.1 | 修复远程开机网页、LuCI「检查巴法云」与 iOS App（1.0.1）解析巴法云主题列表的错误：接口实际返回 `{"code":0,"data":{"data":[…]}}`，比官方文档示例多包一层，旧版把列表当成空的，导致误报「路由器里填的主题在巴法云里不存在」，网页和 App 里也看不到电脑。测试改用真实返回格式（2026-11-05 实测）；诊断结论补充「米家里绑定的巴法账号须与私钥是同一账号」。 |
+| v2.14.2 | 修复升级到 v2.14.1 后「检查巴法云」仍误报「主题不存在」：固件内文件的修改时间固定为 OpenWrt 发布日期，uhttpd 也不发 Cache-Control，浏览器会长期使用缓存里的旧诊断脚本和旧 LuCI 视图。诊断脚本改为每次带时间戳加载并校验脚本版本（旧脚本提示 Ctrl+F5）；LuCI 视图改名为 `remote-wol-v3.js`、网页脚本与链接带版本号；路由器里填的主题不在列表里时再用 `getmsg` 单独复核，列表查询失败如实显示原因，不再当成「没有主题」。 |
 
 ## 源码回归验证
 
