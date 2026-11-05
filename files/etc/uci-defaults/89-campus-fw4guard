@@ -58,6 +58,12 @@ start() {
 		logger -t campus-fw4guard "fw4 ruleset FAILED dry-run; quarantining /etc/nftables.d drop-ins"
 		mkdir -p /etc/nftables.d.disabled
 		mv /etc/nftables.d/*.nft /etc/nftables.d.disabled/ 2>/dev/null
+		# WiFi 仅内网的网桥规则经 firewall include 引入、不在 nftables.d 里（例如保留配置降级到
+		# 没有 kmod-nft-bridge 的固件），同样可能拖垮 fw4：换成空规则，原文件留作排查
+		if [ -f /etc/wifi-lanonly.nft ]; then
+			cp /etc/wifi-lanonly.nft /etc/nftables.d.disabled/wifi-lanonly.nft 2>/dev/null
+			echo '# campus-fw4guard: firewall dry-run failed, wifi-lanonly bridge rules disabled' > /etc/wifi-lanonly.nft
+		fi
 		logger -t campus-fw4guard "drop-ins moved to /etc/nftables.d.disabled - router runs stock firewall; check logread for the failing rule"
 	fi
 }

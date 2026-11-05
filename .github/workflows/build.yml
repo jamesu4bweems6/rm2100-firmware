@@ -14,7 +14,7 @@ on:
       fw_version:
         description: "Firmware version stamp (written to /etc/campus-fix-version and artifact name)"
         required: false
-        default: "2.14.2"
+        default: "2.15.0"
 
 env:
   PROFILE: xiaomi_redmi-router-ac2100
@@ -79,6 +79,7 @@ jobs:
           python3 tests/test_lan_speed_daemon.py
           python3 tests/test_lan_transfer_daemon.py
           python3 tests/test_remote_wol.py
+          python3 tests/test_wifi_lanonly.py
 
       - name: Test LAN transfer on real uhttpd, native ucode and STUN in real browsers
         run: |
@@ -186,8 +187,10 @@ jobs:
             ib/files/usr/share/remote-wol/bemfa.uc ib/files/usr/share/remote-wol/wake
           # 私钥存在这里，镜像里就只给 root 读
           chmod 0600 ib/files/etc/config/remote-wol
+          chmod 0755 ib/files/usr/libexec/wifi-lanonly/ctl ib/files/etc/hotplug.d/net/60-wifi-lanonly \
+            ib/files/etc/uci-defaults/88-wifi-lanonly
           # stamp the firmware version into the overlay
-          FWV="${{ github.event.inputs.fw_version || '2.14.2' }}"
+          FWV="${{ github.event.inputs.fw_version || '2.15.0' }}"
           echo "$FWV" > ib/files/etc/campus-fix-version
           sed -i "s|^echo \".*\" > /etc/campus-fix-version|echo \"$FWV\" > /etc/campus-fix-version|"             ib/files/etc/uci-defaults/99-campus-fix-banner
           echo "firmware version: $FWV"
@@ -222,6 +225,15 @@ jobs:
               rc=1
             fi
           done
+          # WiFi 仅内网：ctl 生成的网桥规则由 fw4 以 ruleset-append 引入，校验失败会拖垮整套防火墙。
+          # 用测试里的桩环境生成一份两个网口的样例，交给真实 nft（含 bridge 族）校验。
+          python3 tests/test_wifi_lanonly.py --render-sample /tmp/wifi-lanonly.nft
+          cat /tmp/wifi-lanonly.nft
+          sudo modprobe nf_tables 2>/dev/null || true
+          if ! sudo unshare --net nft -c -f /tmp/wifi-lanonly.nft; then
+            echo "SYNTAX ERROR in generated wifi-lanonly bridge rules" >&2
+            rc=1
+          fi
           exit $rc
 
       - name: Build firmware
@@ -247,6 +259,8 @@ jobs:
           PKGS="$PKGS uhttpd ucode ucode-mod-fs ucode-mod-socket"
           # 远程开机：巴法云长连接复用上面的 ucode socket；etherwake 发二层魔术包（约 10KB）
           PKGS="$PKGS etherwake"
+          # WiFi 仅内网：网桥层给指定 WiFi 网口的流量打标记，需要 nftables 的 bridge 族（约 7KB）
+          PKGS="$PKGS kmod-nft-bridge"
           make image \
             PROFILE="$PROFILE" \
             PACKAGES="$PKGS" \
@@ -259,7 +273,7 @@ jobs:
         run: |
           # campus-fix vX.Y.Z 前缀：下载下来一眼可辨版本（breed 刷机界面
           # 只显示文件名，原名一串 openwrt-24.10.2-ramips-... 容易刷错包）
-          FWV="${{ github.event.inputs.fw_version || '2.14.2' }}"
+          FWV="${{ github.event.inputs.fw_version || '2.15.0' }}"
           cd ib/bin/targets/*/*/
           for f in openwrt-*-xiaomi_redmi-router-ac2100-*.bin \
                    openwrt-*-xiaomi_redmi-router-ac2100.manifest; do
@@ -308,6 +322,17 @@ jobs:
           unsquashfs -lls "$root" etc/init.d/remote-wol usr/share/remote-wol/bemfa.uc usr/share/remote-wol/wake \
             | awk '$1 ~ /^-/ { print; if ($1 !~ /^-rwx/) bad = 1 } END { exit bad }'
           echo "远程开机文件、权限与 etherwake 已在镜像内核对"
+          grep -q "^kmod-nft-bridge - " ./*.manifest || { echo "manifest 缺少 kmod-nft-bridge" >&2; exit 1; }
+          for f in usr/libexec/wifi-lanonly/ctl etc/nftables.d/40-wifi-lanonly.nft etc/hotplug.d/net/60-wifi-lanonly \
+                   etc/uci-defaults/88-wifi-lanonly etc/wifi-lanonly.nft \
+                   usr/share/luci/menu.d/luci-app-wifi-lanonly.json usr/share/rpcd/acl.d/luci-app-wifi-lanonly.json \
+                   www/luci-static/resources/view/wifi-lanonly-v1.js; do
+            unsquashfs -cat "$root" "$f" > "$work/check" || { echo "镜像缺少 $f" >&2; exit 1; }
+            cmp "$work/check" "$GITHUB_WORKSPACE/files/$f" || { echo "镜像内容与仓库不一致：$f" >&2; exit 1; }
+          done
+          unsquashfs -lls "$root" usr/libexec/wifi-lanonly/ctl etc/hotplug.d/net/60-wifi-lanonly \
+            | awk '$1 ~ /^-/ { print; if ($1 !~ /^-rwx/) bad = 1 } END { exit bad }'
+          echo "WiFi 仅内网文件、权限与 kmod-nft-bridge 已在镜像内核对"
 
       - name: Package LAN transfer and speed test add-on
         run: python3 tools/package_lan_transfer.py
@@ -315,7 +340,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rm2100-firmware-v${{ github.event.inputs.fw_version || '2.14.2' }}-openwrt-${{ github.event.inputs.openwrt_version || '24.10.2' }}
+          name: rm2100-firmware-v${{ github.event.inputs.fw_version || '2.15.0' }}-openwrt-${{ github.event.inputs.openwrt_version || '24.10.2' }}
           path: |
             ib/bin/targets/*/*/campus-fix-v*-xiaomi_redmi-router-ac2100-squashfs-kernel1.bin
             ib/bin/targets/*/*/campus-fix-v*-xiaomi_redmi-router-ac2100-squashfs-rootfs0.bin

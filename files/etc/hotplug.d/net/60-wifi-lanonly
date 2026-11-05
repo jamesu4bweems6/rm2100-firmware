@@ -1,0 +1,14 @@
+#!/bin/sh
+# WiFi 仅内网：WiFi 网口新建（开机、WiFi 重启、改无线设置）后重新生成网桥规则。
+# 网口刚出现时 hostapd 可能还没起来、读不到 SSID，所以在后台等它就绪再应用。
+[ "$ACTION" = add ] || exit 0
+[ -d "/sys/class/net/$INTERFACE/phy80211" ] || exit 0
+[ -s /etc/wifi-lanonly.list ] || grep -q '^table bridge wifi_lanonly {' /etc/wifi-lanonly.nft 2>/dev/null || exit 0
+(
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+		iwinfo "$INTERFACE" info 2>/dev/null | head -n1 | grep -q 'ESSID: "' && break
+		sleep 2
+	done
+	/usr/libexec/wifi-lanonly/ctl apply
+) </dev/null >/dev/null 2>&1 &
+exit 0

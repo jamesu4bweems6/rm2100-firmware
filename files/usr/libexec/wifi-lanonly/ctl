@@ -1,0 +1,220 @@
+#!/bin/sh
+# WiFi 仅内网：指定 SSID 的无线设备只能访问局域网（路由器、网线设备、其他 WiFi 设备），不能上外网；
+# 网线连接的设备和其他 SSID 不受影响。
+#
+# 原理：WiFi 和网线口同在 br-lan 网桥、同一网段，路由层分不出来源，所以在网桥层（bridge prerouting）
+# 给从这些 WiFi 网口进来的包打上 0x40000000 标记；/etc/nftables.d/40-wifi-lanonly.nft 在 inet 转发链里
+# 拒绝带标记、且要转发到 br-lan 以外（外网）的包。网桥内二层互访不经过 inet 转发链，所以内网照常互通。
+#
+# 用法：ctl status            输出 JSON 状态（LuCI 用）
+#       ctl set <SSID> <1|0>  对某个 SSID 开启 / 关闭仅内网，并立即生效
+#       ctl apply             按当前配置重新生成规则（开机、WiFi 重启时由 hotplug 调用）
+#
+# 配置：/etc/wifi-lanonly.list，每行一个 SSID。规则：/etc/wifi-lanonly.nft，由 fw4 以 ruleset-append 引入。
+
+LIST=${WIFI_LANONLY_LIST:-/etc/wifi-lanonly.list}
+NFT_FILE=${WIFI_LANONLY_NFT:-/etc/wifi-lanonly.nft}
+NET=${WIFI_LANONLY_NET:-/sys/class/net}
+MARK=0x40000000
+TAB=$(printf '\t')
+
+log() {
+	logger -t wifi-lanonly "$*" 2>/dev/null
+}
+
+is_listed() {
+	[ -f "$LIST" ] && grep -Fxq -- "$1" "$LIST"
+}
+
+# 当前所有 AP 网口：输出「网口<TAB>SSID」；SSID 还读不到（WiFi 正在启动）时输出空 SSID
+ap_ifaces() {
+	for dir in "$NET"/*; do
+		[ -d "$dir/phy80211" ] || continue
+		ifn=${dir##*/}
+		case "$ifn" in *[!A-Za-z0-9._-]*) continue ;; esac
+		info=$(iwinfo "$ifn" info 2>/dev/null) || continue
+		printf '%s\n' "$info" | grep -q 'Mode: Master' || continue
+		ssid=$(printf '%s\n' "$info" | sed -n '1s/^[^ ]*  *ESSID: "\(.*\)"$/\1/p')
+		printf '%s\t%s\n' "$ifn" "$ssid"
+	done
+}
+
+# 生成网桥标记规则。没有要隔离的网口时删除整张表。
+render() {
+	names=$(ap_ifaces | while IFS="$TAB" read -r ifn ssid; do
+		is_listed "$ssid" && printf '"%s", ' "$ifn"
+	done)
+	names=${names%, }
+	echo '# 由 /usr/libexec/wifi-lanonly/ctl 生成，请勿手动修改'
+	echo 'table bridge wifi_lanonly'
+	echo 'delete table bridge wifi_lanonly'
+	[ -n "$names" ] || return 0
+	cat <<EOF
+table bridge wifi_lanonly {
+	chain prerouting {
+		type filter hook prerouting priority -200; policy accept;
+		iifname { $names } meta mark set meta mark | $MARK counter comment "wifi-lanonly: mark Wi-Fi ingress"
+	}
+}
+EOF
+}
+
+# 让 fw4 在每次启动 / 重载防火墙时都引入规则文件
+ensure_include() {
+	[ "$(uci -q get firewall.wifi_lanonly)" = include ] && return 1
+	uci -q batch <<EOF
+set firewall.wifi_lanonly=include
+set firewall.wifi_lanonly.type='nftables'
+set firewall.wifi_lanonly.path='$NFT_FILE'
+set firewall.wifi_lanonly.position='ruleset-append'
+commit firewall
+EOF
+	return 0
+}
+
+apply() {
+	# WiFi 刚启动、SSID 还读不到时先不动规则，等 hotplug 重试，避免短暂解除隔离
+	if ap_ifaces | grep -q "${TAB}\$"; then
+		log '有 WiFi 网口尚未就绪，暂不更新规则'
+		return 2
+	fi
+	tmp=$NFT_FILE.$$
+	render > "$tmp" || { rm -f "$tmp"; return 1; }
+	changed=0
+	ensure_include && changed=1
+	rc=0
+	if ! cmp -s "$tmp" "$NFT_FILE"; then
+		# 先让内核校验：缺少 kmod-nft-bridge 时不能把整套防火墙拖垮
+		if ! nft -c -f "$tmp" >/dev/null 2>&1; then
+			log '网桥规则校验失败（缺少 kmod-nft-bridge？），未启用 WiFi 仅内网'
+			echo '# wifi-lanonly：网桥规则校验失败（缺少 kmod-nft-bridge？），未启用' > "$tmp"
+			rc=3
+		fi
+		mv "$tmp" "$NFT_FILE"
+		changed=1
+	else
+		rm -f "$tmp"
+	fi
+	if [ "$changed" = 1 ]; then
+		fw4 -q reload >/dev/null 2>&1 || /etc/init.d/firewall reload >/dev/null 2>&1
+	fi
+	return $rc
+}
+
+json_str() {
+	# JSON 字符串转义：反斜杠、双引号，去掉控制字符
+	printf '"%s"' "$(printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+# 配置里所有 AP 模式的 SSID（含未启用的），输出「SSID<TAB>频段<TAB>是否关闭」
+configured_ssids() {
+	# uci show 的值形如 'it'\''s'：去掉首尾单引号，再把 '\'' 还原成 '
+	uci -q show wireless | awk -v tab="$TAB" -v q="'" '
+		function val(s,   esc, i) {
+			sub(/^[^=]*=/, "", s)
+			if (length(s) >= 2 && substr(s, 1, 1) == q && substr(s, length(s), 1) == q) s = substr(s, 2, length(s) - 2)
+			esc = q "\\" q q
+			while ((i = index(s, esc)) > 0) s = substr(s, 1, i - 1) q substr(s, i + length(esc))
+			return s
+		}
+		/^wireless\.[^.=]+=wifi-iface$/ { split($0, a, /[.=]/); order[++n] = a[2]; next }
+		/^wireless\.[^.=]+\.[a-z_]+=/ { split($0, a, /[.=]/); v[a[2], a[3]] = val($0) }
+		END {
+			for (i = 1; i <= n; i++) {
+				s = order[i]
+				if (v[s, "mode"] != "ap" || v[s, "ssid"] == "") continue
+				dev = v[s, "device"]
+				off = (v[s, "disabled"] == "1" || v[dev, "disabled"] == "1") ? 1 : 0
+				print v[s, "ssid"] tab dev tab off
+			}
+		}'
+}
+
+status() {
+	blocked=$(nft list chain inet fw4 wifi_lanonly_forward 2>/dev/null | sed -n 's/.*counter packets \([0-9]*\).*/\1/p' | head -n1)
+	bridge=false
+	nft list table bridge wifi_lanonly >/dev/null 2>&1 && bridge=true
+	live=$(ap_ifaces)
+	printf '{"blocked":%s,"active":%s,"ssids":[' "${blocked:-0}" "$bridge"
+	first=1
+	seen=''
+	emit() {
+		ssid=$1 band=$2 off=$3
+		[ -n "$ssid" ] || return 0
+		case "$seen" in *"$TAB$ssid$TAB"*) return ;; esac
+		seen="$seen$TAB$ssid$TAB"
+		ifs='' stations=0
+		for ifn in $(printf '%s\n' "$live" | awk -F "$TAB" -v s="$ssid" '$2 == s { print $1 }'); do
+			ifs="$ifs$(json_str "$ifn"),"
+			n=$(iwinfo "$ifn" assoclist 2>/dev/null | grep -c '^[0-9A-Fa-f][0-9A-Fa-f]:')
+			stations=$((stations + n))
+		done
+		lanonly=false
+		is_listed "$ssid" && lanonly=true
+		[ "$first" = 1 ] || printf ','
+		first=0
+		printf '{"ssid":%s,"radio":%s,"disabled":%s,"lanonly":%s,"ifnames":[%s],"stations":%s}' \
+			"$(json_str "$ssid")" "$(json_str "$band")" "$([ "$off" = 1 ] && echo true || echo false)" \
+			"$lanonly" "${ifs%,}" "$stations"
+	}
+	while IFS="$TAB" read -r ssid band off; do
+		emit "$ssid" "$band" "$off"
+	done <<EOF
+$(configured_ssids)
+EOF
+	# 清单里有、但无线配置里已经没有的 SSID（例如改了名）也列出来，方便取消
+	if [ -f "$LIST" ]; then
+		while IFS= read -r ssid; do
+			[ -n "$ssid" ] && emit "$ssid" "" 1
+		done < "$LIST"
+	fi
+	printf ']}\n'
+}
+
+set_ssid() {
+	ssid=$1 value=$2
+	len=$(printf '%s' "$ssid" | wc -c)
+	if [ "$len" -lt 1 ] || [ "$len" -gt 32 ] || [ "$(printf '%s' "$ssid" | wc -l)" -gt 0 ]; then
+		echo 'SSID 无效' >&2
+		return 2
+	fi
+	case "$value" in 0|1) ;; *) echo '参数只能是 0 或 1' >&2; return 2 ;; esac
+	tmp=$LIST.$$
+	{ [ -f "$LIST" ] && grep -Fxv -- "$ssid" "$LIST"; [ "$value" = 1 ] && printf '%s\n' "$ssid"; } > "$tmp"
+	mv "$tmp" "$LIST"
+	log "$( [ "$value" = 1 ] && echo '开启' || echo '关闭' ) SSID「$ssid」仅内网"
+	apply
+	rc=$?
+	# 网口未就绪（rc=2）不算失败：hotplug 会在 WiFi 起来后补上
+	[ "$rc" = 2 ] && rc=0
+	return $rc
+}
+
+lockfile=/var/lock/wifi-lanonly.lock
+case "$1" in
+	status)
+		status
+		;;
+	set)
+		[ $# -eq 3 ] || { echo '用法：ctl set <SSID> <1|0>' >&2; exit 2; }
+		command -v lock >/dev/null 2>&1 && lock "$lockfile"
+		set_ssid "$2" "$3"
+		rc=$?
+		command -v lock >/dev/null 2>&1 && lock -u "$lockfile"
+		exit $rc
+		;;
+	apply)
+		command -v lock >/dev/null 2>&1 && lock "$lockfile"
+		apply
+		rc=$?
+		command -v lock >/dev/null 2>&1 && lock -u "$lockfile"
+		exit $rc
+		;;
+	render)
+		render
+		;;
+	*)
+		echo '用法：ctl status | ctl set <SSID> <1|0> | ctl apply' >&2
+		exit 2
+		;;
+esac

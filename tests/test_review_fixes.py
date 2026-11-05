@@ -171,7 +171,9 @@ echo completed
                         rules = Path(temp) / "nftables.d"
                         rules.mkdir()
                         (rules / "test.nft").write_text("test")
-                        guard = GUARD.replace("/etc/nftables.d", base + "/nftables.d")
+                        wifi = Path(temp) / "wifi-lanonly.nft"
+                        wifi.write_text("table bridge wifi_lanonly {}\n")
+                        guard = GUARD.replace("/etc/nftables.d", base + "/nftables.d").replace("/etc/wifi-lanonly.nft", base + "/wifi-lanonly.nft")
                         # rc.common's default start()/boot() dispatch; no USE_PROCD.
                         script = 'start() { :; }; boot() { start "$@"; };\n' + guard
                         script += f'''
@@ -184,6 +186,10 @@ logger() {{ :; }}
                         rejected = bool(render_rc or nft_rc or empty)
                         self.assertEqual((rules / "test.nft").exists(), not rejected)
                         self.assertEqual((Path(temp) / "nftables.d.disabled/test.nft").exists(), rejected)
+                        # WiFi 仅内网的网桥规则经 firewall include 引入，校验失败时也要停用（文件保留、内容换成空规则）
+                        self.assertTrue(wifi.exists())
+                        self.assertEqual("table bridge" in wifi.read_text(), not rejected)
+                        self.assertEqual((Path(temp) / "nftables.d.disabled/wifi-lanonly.nft").exists(), rejected)
 
     def command_argv(self, command):
         # Execute the actual constructed command against a shell function.

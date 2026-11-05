@@ -1,0 +1,15 @@
+{
+	"luci-app-wifi-lanonly": {
+		"description": "Block selected Wi-Fi SSIDs from the Internet while keeping LAN access",
+		"read": {
+			"file": {
+				"/usr/libexec/wifi-lanonly/ctl status": [ "exec" ]
+			}
+		},
+		"write": {
+			"file": {
+				"/usr/libexec/wifi-lanonly/ctl set *": [ "exec" ]
+			}
+		}
+	}
+}

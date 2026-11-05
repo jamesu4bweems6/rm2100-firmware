@@ -1,0 +1,13 @@
+{
+	"admin/network/wifi-lanonly": {
+		"title": "WiFi 仅内网",
+		"order": 16,
+		"action": {
+			"type": "view",
+			"path": "wifi-lanonly-v1"
+		},
+		"depends": {
+			"acl": [ "luci-app-wifi-lanonly" ]
+		}
+	}
+}

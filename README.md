@@ -3,9 +3,11 @@
 红米 RM AC2100（MediaTek MT7621A，128MB RAM / 16MB flash）专用 OpenWrt 固件，
 内置**校园网多设备检测规避**套件，通过 GitHub Actions 云端构建，本机无需 Linux 环境。
 
-**当前固件版本：v2.14.2**（刷入后 `cat /etc/campus-fix-version` 查询；LuCI 页脚也显示 `campus-fix vX.Y.Z`）
+**当前固件版本：v2.15.0**（刷入后 `cat /etc/campus-fix-version` 查询；LuCI 页脚也显示 `campus-fix vX.Y.Z`）
 
 **内网文件互传「邻传」**：连在这台路由器上的手机、电脑用浏览器打开 `http://路由器LAN地址:8080/`（默认 [192.168.1.1:8080](http://192.168.1.1:8080/)）就能互相看到，直接发文件和文字，不用装应用、不用登录后台、不经过外网。详见下方「内网文件互传」一节和 [使用、安装与验证说明](docs/lan-transfer.md)。
+
+**WiFi 仅内网**：LuCI「网络 → WiFi 仅内网」一键让某个 WiFi 只能访问内网、不能上外网，网线设备不受影响。详见 [说明](docs/wifi-lanonly.md)。
 
 **远程开机**：路由器没有公网 IP 也能用手机（巴法云 App / 小程序 / 小爱同学）远程唤醒网线连接的电脑。详见下方「远程开机」一节和 [设置说明](docs/remote-wol.md)。
 
@@ -117,6 +119,16 @@
 
 设置步骤、小爱同学接入、iOS App 安装和排查见 [远程开机说明](docs/remote-wol.md)。
 
+### WiFi 仅内网（LuCI「网络 → WiFi 仅内网」）
+
+每个 WiFi 一个「禁止上网 / 恢复上网」按钮，点击立即生效：连这个 WiFi 的设备仍能访问路由器、网线设备和同网段其他设备（邻传、共享、投屏），但不能上外网；网线设备和其他 WiFi 不受影响。
+
+- **原理**：WiFi 与网线同在 br-lan，路由层分不出来源；网桥层（`bridge` prerouting）给选中 WiFi 网口的流量打 `0x40000000` 标记，`inet fw4` 转发链（优先级 -20）拒绝带标记且出口不是 br-lan 的包。新增 `kmod-nft-bridge`（约 7KB）
+- **可靠性**：写入前 `nft -c` 校验，失败不启用、不拖垮防火墙；WiFi 重启后 hotplug 等 SSID 就绪再重建规则，未就绪时不解除限制；按 WiFi 名称生效，双频同名一起限制
+- 命令行：`/usr/libexec/wifi-lanonly/ctl set <SSID> 1|0`、`ctl status`
+
+详见 [WiFi 仅内网说明](docs/wifi-lanonly.md)。
+
 ### 刻意不做的（及理由）
 
 - **不封 DoH**：走 443/TCP 与正常流量无法区分，误伤太大；QUIC 已封，
@@ -127,7 +139,7 @@
 ## 使用方法
 
 1. **构建**：本仓库已配好 Actions。进 **Actions → Build RM AC2100 OpenWrt
-   firmware → Run workflow**，默认参数（24.10.2 + LuCI + Argon 主题 + 简体中文 + v2.14.2）直接 Run，
+   firmware → Run workflow**，默认参数（24.10.2 + LuCI + Argon 主题 + 简体中文 + v2.15.0）直接 Run，
    约 3-5 分钟出包。可调输入：
    - `openwrt_version`：OpenWrt 底包版本
    - `include_luci`：是否带 LuCI（false = 纯 CLI，省内存）
@@ -159,7 +171,7 @@
 ## 首次进系统检查清单
 
 ```
-cat /etc/campus-fix-version        # 应显示 2.14.2
+cat /etc/campus-fix-version        # 应显示 2.15.0
 nft list chain inet fw4 campus_ttl_postrouting     # counter 在涨 = TTL 归一生效
 nft list chain inet fw4 campus_quic_block          # drop 在涨 = 有客户端试图 QUIC
 nft list chain inet fw4 campus_leak_block          # 发现协议封锁生效
@@ -227,7 +239,11 @@ files/
 ├── etc/config/remote-wol            # 远程开机：巴法云私钥与电脑列表（默认关闭）
 ├── usr/share/remote-wol/            # 巴法云客户端（bemfa.uc）、魔术包发送脚本（wake）
 ├── www/remote-wol/                  # 远程开机手机网页（巴法云接口与诊断 bemfa.js 与 LuCI 共用）
+├── usr/libexec/wifi-lanonly/ctl     # WiFi 仅内网：按 SSID 开关、生成网桥标记规则、JSON 状态
+├── etc/nftables.d/40-wifi-lanonly.nft  # WiFi 仅内网：转发链拒绝带标记的外网流量
+├── etc/hotplug.d/net/60-wifi-lanonly   # WiFi 网口重建后重新生成规则
 └── etc/uci-defaults/
+    ├── 88-wifi-lanonly              # WiFi 仅内网首刷：fw4 include、升级保留
     ├── 89-campus-fw4guard           # fw4 规则集自检：加载失败自动隔离 drop-in（保 LAN 永不死）
     ├── 90-remote-wol                # 远程开机首刷：配置权限并注册服务
     ├── 92-lan-transfer              # 邻传首刷：注册并当场启动服务
@@ -292,6 +308,7 @@ files/
 | v2.14.0 | 远程开机：LuCI 页面顶部新增「开机」卡片，每台电脑显示开/关机状态与 IP，一键从路由器发魔术包；新增手机网页 `/remote-wol/`（直接调用巴法云接口，查看状态、发送开机指令）；新增 iOS App「远程开机」（SwiftUI，钥匙串存私钥，Siri「用远程开机打开电脑」，Actions 在模拟器跑单元测试后输出未签名 IPA）；LuCI、网页、App 都有「检查巴法云」，排查米家里看不到设备的原因（主题后缀、未建主题、建错云、昵称、路由器未订阅）。修复网页发送开机后提示被刷新清掉的问题。网页与 LuCI 卡片经真实 Chromium 测试；尚未在真机、真实巴法云与 iPhone 上验证。 |
 | v2.14.1 | 修复远程开机网页、LuCI「检查巴法云」与 iOS App（1.0.1）解析巴法云主题列表的错误：接口实际返回 `{"code":0,"data":{"data":[…]}}`，比官方文档示例多包一层，旧版把列表当成空的，导致误报「路由器里填的主题在巴法云里不存在」，网页和 App 里也看不到电脑。测试改用真实返回格式（2026-11-05 实测）；诊断结论补充「米家里绑定的巴法账号须与私钥是同一账号」。 |
 | v2.14.2 | 修复升级到 v2.14.1 后「检查巴法云」仍误报「主题不存在」：固件内文件的修改时间固定为 OpenWrt 发布日期，uhttpd 也不发 Cache-Control，浏览器会长期使用缓存里的旧诊断脚本和旧 LuCI 视图。诊断脚本改为每次带时间戳加载并校验脚本版本（旧脚本提示 Ctrl+F5）；LuCI 视图改名为 `remote-wol-v3.js`、网页脚本与链接带版本号；路由器里填的主题不在列表里时再用 `getmsg` 单独复核，列表查询失败如实显示原因，不再当成「没有主题」。 |
+| v2.15.0 | 新增「WiFi 仅内网」：LuCI「网络 → WiFi 仅内网」按 SSID 一键禁止上网，连该 WiFi 的设备只能访问路由器和同网段设备，网线设备与其他 WiFi 不受影响；网桥层标记 + fw4 转发链拒绝出外网，新增 kmod-nft-bridge；写入前内核校验、WiFi 重启后自动重建、未就绪不解除限制、设置随升级保留。已在 RM2100 真机部署验证规则、有线与路由器外网正常、WiFi 重启后恢复；真实 WiFi 设备拦截效果待确认。 |
 
 ## 源码回归验证
 
@@ -299,4 +316,4 @@ files/
 
 邻传：`python3 tests/test_lan_transfer.py` 跑后端、二维码、启动脚本、STUN 与文件卫生测试；`python3 tests/test_lan_transfer_daemon.py` 覆盖常驻 HTTP 的真实 TCP、背压及内存配额；浏览器端到端测试见 [docs/lan-transfer.md](docs/lan-transfer.md#验证)。CI 在原生 ucode、常驻 HTTP 和 CGI 回退入口上运行同一组浏览器测试。2026-10-12 已在 RM2100 真机验证常驻中转，三轮 32 MiB 对比的速度中位数从 4.17 MB/s 提升至 6.96 MB/s（约 67%）；尚未实测多台物理 Wi-Fi 设备组合。
 
-远程开机：`python3 tests/test_remote_wol.py` 用 ash/dash 实跑 init 与唤醒脚本；CI 另用原生 ucode 对着本机假巴法云服务器跑真实 TCP，覆盖订阅、指令过滤、心跳、重连与超时。`node tests/test_remote_wol_web.cjs` 在真实 Chromium 中测试手机网页与 LuCI 开机卡片；iOS App 单元测试在 Actions 的模拟器上运行。尚未在真机、真实巴法云服务和 iPhone 上验证，见 [docs/remote-wol.md](docs/remote-wol.md#验证)。
+远程开机：`python3 tests/test_remote_wol.py` 用 ash/dash 实跑 init 与唤醒脚本；CI 另用原生 ucode 对着本机假巴法云服务器跑真实 TCP，覆盖订阅、指令过滤、心跳、重连与超时。`node tests/test_remote_wol_web.cjs` 在真实 Chromium 中测试手机网页与 LuCI 开机卡片；WiFi 仅内网见 `python3 tests/test_wifi_lanonly.py` 与 [docs/wifi-lanonly.md](docs/wifi-lanonly.md#验证)；iOS App 单元测试在 Actions 的模拟器上运行。尚未在真机、真实巴法云服务和 iPhone 上验证，见 [docs/remote-wol.md](docs/remote-wol.md#验证)。

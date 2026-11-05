@@ -1,0 +1,19 @@
+#!/bin/sh
+# WiFi 仅内网首刷：补权限、让 fw4 引入网桥规则文件、配置随固件升级保留。默认不限制任何 SSID。
+chmod 0755 /usr/libexec/wifi-lanonly/ctl /etc/hotplug.d/net/60-wifi-lanonly
+[ -f /etc/wifi-lanonly.list ] || : > /etc/wifi-lanonly.list
+[ -f /etc/wifi-lanonly.nft ] || printf '# 由 /usr/libexec/wifi-lanonly/ctl 生成，请勿手动修改\n' > /etc/wifi-lanonly.nft
+if [ "$(uci -q get firewall.wifi_lanonly)" != include ]; then
+	uci -q batch <<UCI
+set firewall.wifi_lanonly=include
+set firewall.wifi_lanonly.type='nftables'
+set firewall.wifi_lanonly.path='/etc/wifi-lanonly.nft'
+set firewall.wifi_lanonly.position='ruleset-append'
+commit firewall
+UCI
+fi
+for f in /etc/wifi-lanonly.list /etc/wifi-lanonly.nft; do
+	grep -qxF "$f" /etc/sysupgrade.conf 2>/dev/null || echo "$f" >> /etc/sysupgrade.conf
+done
+rm -f /tmp/luci-indexcache* /tmp/luci-modulecache/* 2>/dev/null
+exit 0

@@ -1,0 +1,12 @@
+# WiFi 仅内网：拒绝被标记为「来自仅内网 WiFi」的流量路由到 br-lan 以外的接口（即外网）。
+# 标记由 /etc/wifi-lanonly.nft（网桥 prerouting，按 WiFi 网口打 0x40000000）生成，
+# 在 LuCI「网络 → WiFi 仅内网」或 /usr/libexec/wifi-lanonly/ctl 里按 SSID 开关。
+# 没有任何 SSID 开启时不会有包带标记，这条规则不起作用。
+#
+# 优先级 filter - 20：早于 fw4 的 forward 链（含 established 放行）和 campus 的转发规则，
+# 已建立的连接在开启后也会立即被切断。同网段互访走网桥二层转发，不经过这里，内网照常互通；
+# 访问路由器本身（DNS、DHCP、LuCI、邻传）走 input 链，也不受影响。
+chain wifi_lanonly_forward {
+	type filter hook forward priority filter - 20; policy accept;
+	meta mark & 0x40000000 == 0x40000000 oifname != "br-lan" counter reject with icmpx type admin-prohibited comment "wifi-lanonly: block Wi-Fi to WAN"
+}
