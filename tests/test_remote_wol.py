@@ -395,11 +395,19 @@ class DaemonTests(unittest.TestCase):
         self.assertIn('私钥', self.status()['error'])
 
     def test_unreachable_server_backs_off(self):
-        server = self.server()
-        server.close()
-        process = self.start(server, 'pc001=AA:BB:CC:DD:EE:01')
+        # 占住一个端口但不 listen：连接会被立即拒绝。不能用关闭监听套接字来模拟，
+        # Linux 上另一线程里阻塞的 accept() 不会因 close() 中断，仍会接受连接。
+        holder = socket.socket()
+        self.addCleanup(holder.close)
+        holder.bind(('127.0.0.1', 0))
+
+        class Closed:
+            port = holder.getsockname()[1]
+
+        process = self.start(Closed, 'pc001=AA:BB:CC:DD:EE:01')
         self.assertTrue(self.wait_for(lambda: self.status().get('state') in ('offline', 'connecting')
                                       and self.status().get('error')), self.status())
+        self.assertIn('失败', self.status()['error'])
         self.assertIsNone(process.poll(), '连不上服务器时守护进程应常驻重试')
 
     def test_rejects_bad_arguments(self):
