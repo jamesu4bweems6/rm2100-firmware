@@ -15,5 +15,12 @@ if [ -r /lib/functions/network.sh ]; then
 fi
 [ -n "$dev" ] || dev=br-lan
 
-# -b：目的地址用 ff:ff:ff:ff:ff:ff。电脑睡眠后交换芯片早已忘了它的 MAC，广播才能保证送达。
-exec /usr/bin/etherwake -b -i "$dev" "$mac"
+# 发 3 轮，每轮一个广播包（-b，目的 ff:ff:ff:ff:ff:ff：电脑关机后交换芯片早已忘了它的 MAC，广播才能保证送达）
+# 和一个直接发给电脑 MAC 的包（个别网卡关机后只认目的地址是自己的魔术包）。
+# 魔术包本身无副作用，多发几个是为了扛住偶发丢包。任意一个发送成功即算成功。
+ok=1
+for round in 1 2 3; do
+	/usr/bin/etherwake -b -i "$dev" "$mac" && ok=0
+	/usr/bin/etherwake -i "$dev" "$mac" && ok=0
+done
+exit $ok

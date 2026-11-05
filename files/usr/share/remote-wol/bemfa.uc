@@ -34,7 +34,8 @@ const RETRY_MAX = 120;      // 秒；重连间隔上限
 const WAKE_GAP = 5;         // 秒；同一台电脑短时间内重复的指令只执行一次
 const PROBE_FIRST = 10;     // 秒；第一次探测后多久读取结果（ARP 解析失败最长约 8 秒）
 const PROBE_EVERY = 30;     // 秒；之后每隔多久探测一次在线状态
-const GRACE = 180;          // 秒；收到指令后给电脑开机/关机留的时间，期间不改写云端状态
+const GRACE = 20;           // 秒；收到指令后暂不改写云端状态的时间，够一轮 ARP 探测出结果即可。
+                            // 不再等电脑开机完成：否则 App 在这段时间里会把「刚发的 on」当成「已开机」。
 const MAX_HOSTS = 8;
 const MAX_LINE = 4096;
 const MAX_HISTORY = 10;
@@ -111,7 +112,7 @@ function parse(line) {
 // 下一轮读 /proc/net/arp：标志含 0x2（已解析）说明电脑在线，解析失败的条目 MAC 会变成全 0。
 
 const udp = sync ? socket.create(socket.AF_INET, socket.SOCK_DGRAM) : null;
-let next_probe = 0;
+let next_probe = 0, probe_soon = false;
 
 function ipv4(s) {
 	return match(s, /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/) ? s : null;
@@ -176,6 +177,12 @@ function publish_states(conn) {
 		let p = probe[t];
 		if (p.online == null || now() < p.grace)
 			continue;
+		// 宽限期刚结束：无论与指令是否一致都重写一次，带上新的时间戳。
+		// App/网页据此分辨「这是刚发的开机指令」还是「路由器确认电脑已开机」。
+		if (p.grace) {
+			p.grace = 0;
+			p.published = null;
+		}
 		let want = p.online ? 'on' : 'off';
 		if (p.published == want)
 			continue;
@@ -225,6 +232,8 @@ function handle(line) {
 			// 云端状态已被这条指令改写；宽限期过后若与实际不符再写回
 			probe[topic].published = on ? 'on' : 'off';
 			probe[topic].grace = now() + GRACE;
+			// 立刻探测一次，宽限期结束时就有新结果可写回
+			probe_soon = true;
 		}
 		if (on)
 			wake(topic, msg);
@@ -281,9 +290,11 @@ function session() {
 				save();
 			}
 		}
-		if (sync && now() >= next_probe) {
+		if (sync && (probe_soon || now() >= next_probe)) {
 			run_probe();
-			next_probe = now() + (next_probe == 0 ? PROBE_FIRST : PROBE_EVERY);
+			// 启动或刚收到指令后，隔 PROBE_FIRST 秒就读结果；平时每 PROBE_EVERY 秒一轮
+			next_probe = now() + ((next_probe == 0 || probe_soon) ? PROBE_FIRST : PROBE_EVERY);
+			probe_soon = false;
 		}
 		if (sync && status.state == 'online' && !publish_states(conn)) {
 			set_state('offline', '同步状态失败：' + socket.error());

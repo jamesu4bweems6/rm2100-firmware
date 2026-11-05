@@ -172,6 +172,31 @@ final class RemoteWOLTests: XCTestCase {
         XCTAssertEqual(bad.last?.level, .info, "有错误时总结不标记为正常")
     }
 
+    /// 与网页 bemfa.js 的 wakeView 规则一致：只有晚于指令那条 on 的 on 才算确认开机，用服务器时间
+    func testWakeViewNeedsRouterConfirmation() {
+        let sent = Date(timeIntervalSince1970: 1_000)
+        var w = WakeTrack(sentAt: sent)
+        func t(_ msg: String, _ unix: Int) -> BemfaTopic { BemfaTopic(topic: "pc001", msg: msg, unix: unix) }
+        Bemfa.trackWake(&w, t("off", 50))
+        XCTAssertNil(w.baseUnix, "指令还没生效时不记录基准")
+        Bemfa.trackWake(&w, t("on", 9000))
+        XCTAssertEqual(w.baseUnix, 9000)
+        Bemfa.trackWake(&w, t("on", 9100))
+        XCTAssertEqual(w.baseUnix, 9000, "基准只记第一次")
+        XCTAssertEqual(Bemfa.wakeView(t("on", 9000), w, now: sent.addingTimeInterval(10)),
+                       WakeView(label: "开机中…等待路由器确认", on: false, level: .wait, done: false))
+        XCTAssertEqual(Bemfa.wakeView(t("off", 9020), w, now: sent.addingTimeInterval(30)).label, "开机中…等待电脑响应")
+        XCTAssertEqual(Bemfa.wakeView(t("on", 9060), w, now: sent.addingTimeInterval(70)),
+                       WakeView(label: "已开机", on: true, level: .ok, done: true))
+        XCTAssertEqual(Bemfa.wakeView(t("off", 9020), w, now: sent.addingTimeInterval(181)),
+                       WakeView(label: "电脑没有响应开机指令", on: false, level: .fail, done: false))
+        XCTAssertTrue(Bemfa.wakeView(t("off", 9020), w, now: sent.addingTimeInterval(601)).done, "10 分钟后忘掉这次指令")
+        XCTAssertEqual(Bemfa.wakeView(t("on", 9000), w, now: sent.addingTimeInterval(181)).level, .unknown)
+        XCTAssertEqual(Bemfa.wakeView(t("on", 1), nil, now: sent).label, "已开机")
+        XCTAssertEqual(Bemfa.wakeView(t("off", 1), nil, now: sent).label, "已关机")
+        XCTAssertEqual(Bemfa.wakeView(t("", 1), nil, now: sent).label, "状态未知")
+    }
+
     func testSortPutsMijiaTopicsFirst() {
         let sorted = Bemfa.sortedForDisplay([BemfaTopic(topic: "zz"), BemfaTopic(topic: "pc001"), BemfaTopic(topic: "aa"), BemfaTopic(topic: "nas006")])
         XCTAssertEqual(sorted.map(\.topic), ["nas006", "pc001", "aa", "zz"])
@@ -197,9 +222,11 @@ final class RemoteWOLTests: XCTestCase {
         XCTAssertEqual(model.topics.first?.power, .on)
         await model.wake(model.topics[0])
         XCTAssertTrue(posted)
-        XCTAssertEqual(model.message, "已向「电脑」发送开机指令。", "刷新后仍保留发送成功的提示")
+        XCTAssertEqual(model.message, "已向「电脑」发送开机指令，正在等待电脑响应（通常 30 秒到 1 分钟）。", "刷新后仍保留发送成功的提示")
         XCTAssertFalse(model.isError)
         XCTAssertTrue(model.sending.isEmpty)
+        // 指令本身的 on 不能显示成「已开机」
+        XCTAssertEqual(model.view(for: model.topics[0]).label, "开机中…等待路由器确认")
         model.clearKey()
         XCTAssertNil(KeyStore.load())
         XCTAssertTrue(model.topics.isEmpty)

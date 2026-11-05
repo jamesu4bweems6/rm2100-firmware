@@ -23,7 +23,7 @@ INIT = ROOT / 'files/etc/init.d/remote-wol'
 DEFAULTS = ROOT / 'files/etc/uci-defaults/90-remote-wol'
 DAEMON = ROOT / 'files/usr/share/remote-wol/bemfa.uc'
 WAKE = ROOT / 'files/usr/share/remote-wol/wake'
-VIEW = ROOT / 'files/www/luci-static/resources/view/remote-wol-v3.js'
+VIEW = ROOT / 'files/www/luci-static/resources/view/remote-wol-v4.js'
 ACL = ROOT / 'files/usr/share/rpcd/acl.d/luci-app-remote-wol.json'
 MENU = ROOT / 'files/usr/share/luci/menu.d/luci-app-remote-wol.json'
 UCITRACK = ROOT / 'files/usr/share/ucitrack/remote-wol.json'
@@ -140,28 +140,40 @@ class WakeScriptTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.log = Path(self.temp.name) / 'etherwake.log'
         fake = Path(self.temp.name) / 'etherwake'
-        fake.write_text(f'#!/bin/sh\necho "$@" >> {self.log.as_posix()}\n', encoding='utf-8', newline='\n')
+        # FAIL=all 全部失败，FAIL=bcast 只有广播失败（模拟 etherwake 出错）
+        fake.write_text(f'#!/bin/sh\necho "$@" >> {self.log.as_posix()}\n'
+                        'case "$FAIL:$1" in all:*|bcast:-b) exit 1 ;; esac\n', encoding='utf-8', newline='\n')
         self.fake = fake
 
-    def run_wake(self, mac, network=None):
-        body = WAKE.read_text(encoding='utf-8').replace('exec /usr/bin/etherwake', 'exec sh ' + self.fake.as_posix())
+    def run_wake(self, mac, network=None, fail=''):
+        body = WAKE.read_text(encoding='utf-8').replace('/usr/bin/etherwake', 'sh ' + self.fake.as_posix())
         if network is None:
             body = body.replace('/lib/functions/network.sh', Path(self.temp.name, 'missing.sh').as_posix())
         else:
             lib = Path(self.temp.name) / 'network.sh'
             lib.write_text(network, encoding='utf-8', newline='\n')
             body = body.replace('/lib/functions/network.sh', lib.as_posix())
-        return run_sh(self.sh, body.replace('"$1"', '"$WAKE_MAC"', 1), self.temp.name, {'WAKE_MAC': mac})
+        return run_sh(self.sh, body.replace('"$1"', '"$WAKE_MAC"', 1), self.temp.name, {'WAKE_MAC': mac, 'FAIL': fail})
+
+    def sent(self):
+        return [line.split() for line in self.log.read_text().splitlines()]
 
     def test_normalizes_mac_and_uses_lan_device(self):
         result = self.run_wake('aa-bb-cc-dd-ee-0f', 'network_get_device() { eval "$1=br-test"; }\n')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.log.read_text().split(), ['-b', '-i', 'br-test', 'AA:BB:CC:DD:EE:0F'])
+        # 3 轮，每轮一个广播包 + 一个直发电脑 MAC 的包
+        self.assertEqual(self.sent(), [['-b', '-i', 'br-test', 'AA:BB:CC:DD:EE:0F'], ['-i', 'br-test', 'AA:BB:CC:DD:EE:0F']] * 3)
 
     def test_falls_back_to_br_lan(self):
         result = self.run_wake('00:11:22:33:44:55')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.log.read_text().split(), ['-b', '-i', 'br-lan', '00:11:22:33:44:55'])
+        self.assertEqual(self.sent()[0], ['-b', '-i', 'br-lan', '00:11:22:33:44:55'])
+
+    def test_exit_code_reflects_any_success(self):
+        self.assertEqual(self.run_wake('00:11:22:33:44:55', fail='bcast').returncode, 0, '有一个包发出去就算成功')
+        self.log.unlink()
+        self.assertEqual(self.run_wake('00:11:22:33:44:55', fail='all').returncode, 1, '全部失败要报错')
+        self.assertEqual(len(self.sent()), 6, '失败也要把 3 轮都试完')
 
     def test_rejects_invalid_mac(self):
         for mac in ['', '00:11:22:33:44', '00:11:22:33:44:55:66', 'gg:11:22:33:44:55', '00:11:22:33:44:55;reboot',
@@ -273,7 +285,7 @@ class DaemonTests(unittest.TestCase):
                          ('PING_EVERY = 30;', 'PING_EVERY = 1;'), ('TICK = 1000;', 'TICK = 200;'), ('IDLE_LIMIT = 75;', 'IDLE_LIMIT = 3;'),
                          ('RETRY_MIN = 5;', 'RETRY_MIN = 1;'), ("'/proc/net/arp'", json.dumps(str(self.arp))),
                          ("'/tmp/dhcp.leases'", json.dumps(str(self.leases))), ('PROBE_FIRST = 10;', 'PROBE_FIRST = 1;'),
-                         ('PROBE_EVERY = 30;', 'PROBE_EVERY = 1;'), ('GRACE = 180;', 'GRACE = 5;')]:
+                         ('PROBE_EVERY = 30;', 'PROBE_EVERY = 1;'), ('GRACE = 20;', 'GRACE = 5;')]:
             self.assertIn(old, source)
             source = source.replace(old, new)
         self.script = root / 'bemfa.uc'
@@ -368,10 +380,13 @@ class DaemonTests(unittest.TestCase):
         # pc001 开机后写回 on
         self.set_arp(('127.0.0.2', '0x2', 'AA:BB:CC:DD:EE:01'))
         self.assertTrue(server.wait(lambda s: self.up(s, 'pc001', 'on') == 2), server.lines)
+        # 对已开机的 pc001 再发 on：宽限期结束时也要重写一次 on（带新时间戳），App 才能确认电脑真的开着
+        server.push(f'cmd=2&uid={self.UID}&topic=pc001&msg=on\r\n')
+        self.assertTrue(server.wait(lambda s: self.up(s, 'pc001', 'on') == 3, timeout=12), server.lines)
         # 断线重连后重新写一遍全部状态
         server.close_clients()
-        self.assertTrue(server.wait(lambda s: self.up(s, 'pc001', 'on') == 3 and self.up(s, 'tv001', 'off') == 2), server.lines)
-        self.assertEqual(self.wakes(), ['AA:BB:CC:DD:EE:02'], '同步状态不能触发开机')
+        self.assertTrue(server.wait(lambda s: self.up(s, 'pc001', 'on') == 4 and self.up(s, 'tv001', 'off') == 2), server.lines)
+        self.assertEqual(self.wakes(), ['AA:BB:CC:DD:EE:02', 'AA:BB:CC:DD:EE:01'], '同步状态本身不能触发开机')
 
     def test_heartbeat_reconnect_and_resubscribe(self):
         server = self.server()

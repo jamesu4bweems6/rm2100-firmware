@@ -14,7 +14,7 @@ on:
       fw_version:
         description: "Firmware version stamp (written to /etc/campus-fix-version and artifact name)"
         required: false
-        default: "2.15.0"
+        default: "2.15.1"
 
 env:
   PROFILE: xiaomi_redmi-router-ac2100
@@ -190,7 +190,7 @@ jobs:
           chmod 0755 ib/files/usr/libexec/wifi-lanonly/ctl ib/files/etc/hotplug.d/net/60-wifi-lanonly \
             ib/files/etc/uci-defaults/88-wifi-lanonly
           # stamp the firmware version into the overlay
-          FWV="${{ github.event.inputs.fw_version || '2.15.0' }}"
+          FWV="${{ github.event.inputs.fw_version || '2.15.1' }}"
           echo "$FWV" > ib/files/etc/campus-fix-version
           sed -i "s|^echo \".*\" > /etc/campus-fix-version|echo \"$FWV\" > /etc/campus-fix-version|"             ib/files/etc/uci-defaults/99-campus-fix-banner
           echo "firmware version: $FWV"
@@ -273,7 +273,7 @@ jobs:
         run: |
           # campus-fix vX.Y.Z 前缀：下载下来一眼可辨版本（breed 刷机界面
           # 只显示文件名，原名一串 openwrt-24.10.2-ramips-... 容易刷错包）
-          FWV="${{ github.event.inputs.fw_version || '2.15.0' }}"
+          FWV="${{ github.event.inputs.fw_version || '2.15.1' }}"
           cd ib/bin/targets/*/*/
           for f in openwrt-*-xiaomi_redmi-router-ac2100-*.bin \
                    openwrt-*-xiaomi_redmi-router-ac2100.manifest; do
@@ -313,7 +313,7 @@ jobs:
           for f in etc/init.d/remote-wol etc/config/remote-wol etc/uci-defaults/90-remote-wol \
                    usr/share/remote-wol/bemfa.uc usr/share/remote-wol/wake \
                    usr/share/luci/menu.d/luci-app-remote-wol.json usr/share/rpcd/acl.d/luci-app-remote-wol.json \
-                   usr/share/ucitrack/remote-wol.json www/luci-static/resources/view/remote-wol-v3.js \
+                   usr/share/ucitrack/remote-wol.json www/luci-static/resources/view/remote-wol-v4.js \
                    www/remote-wol/index.html www/remote-wol/app.js www/remote-wol/bemfa.js; do
             unsquashfs -cat "$root" "$f" > "$work/check" || { echo "镜像缺少 $f" >&2; exit 1; }
             cmp "$work/check" "$GITHUB_WORKSPACE/files/$f" || { echo "镜像内容与仓库不一致：$f" >&2; exit 1; }
@@ -340,7 +340,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rm2100-firmware-v${{ github.event.inputs.fw_version || '2.15.0' }}-openwrt-${{ github.event.inputs.openwrt_version || '24.10.2' }}
+          name: rm2100-firmware-v${{ github.event.inputs.fw_version || '2.15.1' }}-openwrt-${{ github.event.inputs.openwrt_version || '24.10.2' }}
           path: |
             ib/bin/targets/*/*/campus-fix-v*-xiaomi_redmi-router-ac2100-squashfs-kernel1.bin
             ib/bin/targets/*/*/campus-fix-v*-xiaomi_redmi-router-ac2100-squashfs-rootfs0.bin

@@ -3,7 +3,7 @@
 红米 RM AC2100（MediaTek MT7621A，128MB RAM / 16MB flash）专用 OpenWrt 固件，
 内置**校园网多设备检测规避**套件，通过 GitHub Actions 云端构建，本机无需 Linux 环境。
 
-**当前固件版本：v2.15.0**（刷入后 `cat /etc/campus-fix-version` 查询；LuCI 页脚也显示 `campus-fix vX.Y.Z`）
+**当前固件版本：v2.15.1**（刷入后 `cat /etc/campus-fix-version` 查询；LuCI 页脚也显示 `campus-fix vX.Y.Z`）
 
 **内网文件互传「邻传」**：连在这台路由器上的手机、电脑用浏览器打开 `http://路由器LAN地址:8080/`（默认 [192.168.1.1:8080](http://192.168.1.1:8080/)）就能互相看到，直接发文件和文字，不用装应用、不用登录后台、不经过外网。详见下方「内网文件互传」一节和 [使用、安装与验证说明](docs/lan-transfer.md)。
 
@@ -139,7 +139,7 @@
 ## 使用方法
 
 1. **构建**：本仓库已配好 Actions。进 **Actions → Build RM AC2100 OpenWrt
-   firmware → Run workflow**，默认参数（24.10.2 + LuCI + Argon 主题 + 简体中文 + v2.15.0）直接 Run，
+   firmware → Run workflow**，默认参数（24.10.2 + LuCI + Argon 主题 + 简体中文 + v2.15.1）直接 Run，
    约 3-5 分钟出包。可调输入：
    - `openwrt_version`：OpenWrt 底包版本
    - `include_luci`：是否带 LuCI（false = 纯 CLI，省内存）
@@ -171,7 +171,7 @@
 ## 首次进系统检查清单
 
 ```
-cat /etc/campus-fix-version        # 应显示 2.15.0
+cat /etc/campus-fix-version        # 应显示 2.15.1
 nft list chain inet fw4 campus_ttl_postrouting     # counter 在涨 = TTL 归一生效
 nft list chain inet fw4 campus_quic_block          # drop 在涨 = 有客户端试图 QUIC
 nft list chain inet fw4 campus_leak_block          # 发现协议封锁生效
@@ -309,6 +309,7 @@ files/
 | v2.14.1 | 修复远程开机网页、LuCI「检查巴法云」与 iOS App（1.0.1）解析巴法云主题列表的错误：接口实际返回 `{"code":0,"data":{"data":[…]}}`，比官方文档示例多包一层，旧版把列表当成空的，导致误报「路由器里填的主题在巴法云里不存在」，网页和 App 里也看不到电脑。测试改用真实返回格式（2026-11-05 实测）；诊断结论补充「米家里绑定的巴法账号须与私钥是同一账号」。 |
 | v2.14.2 | 修复升级到 v2.14.1 后「检查巴法云」仍误报「主题不存在」：固件内文件的修改时间固定为 OpenWrt 发布日期，uhttpd 也不发 Cache-Control，浏览器会长期使用缓存里的旧诊断脚本和旧 LuCI 视图。诊断脚本改为每次带时间戳加载并校验脚本版本（旧脚本提示 Ctrl+F5）；LuCI 视图改名为 `remote-wol-v3.js`、网页脚本与链接带版本号；路由器里填的主题不在列表里时再用 `getmsg` 单独复核，列表查询失败如实显示原因，不再当成「没有主题」。 |
 | v2.15.0 | 新增「WiFi 仅内网」：LuCI「网络 → WiFi 仅内网」按 SSID 一键禁止上网，连该 WiFi 的设备只能访问路由器和同网段设备，网线设备与其他 WiFi 不受影响；网桥层标记 + fw4 转发链拒绝出外网，新增 kmod-nft-bridge；写入前内核校验、WiFi 重启后自动重建、未就绪不解除限制、设置随升级保留。已在 RM2100 真机部署验证规则、有线与路由器外网正常、WiFi 重启后恢复；真实 WiFi 设备拦截效果待确认。 |
+| v2.15.1 | 远程开机：修复 App / 网页发出开机指令后立即显示「已开机」（那只是指令本身的 on）。路由器收到指令后立即探测、宽限期由 3 分钟缩短为约 20 秒，宽限期结束总会带新时间戳重写真实状态；App 1.0.2 与网页按服务器时间区分「指令」与「路由器确认」，显示「开机中…」直到确认，3 分钟无响应给出网卡排查提示。唤醒脚本每次发 3 轮广播 + 直发 MAC 的魔术包。文档补充「路由器发了唤醒包、电脑没开」的排查（链路状态判断、MAC 被改、网卡高级属性）。LuCI 视图改名 `remote-wol-v4.js`。 |
 
 ## 源码回归验证
 

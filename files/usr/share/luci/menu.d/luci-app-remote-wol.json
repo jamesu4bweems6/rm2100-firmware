@@ -4,7 +4,7 @@
 		"order": 92,
 		"action": {
 			"type": "view",
-			"path": "remote-wol-v3"
+			"path": "remote-wol-v4"
 		},
 		"depends": {
 			"acl": [ "luci-app-remote-wol" ],

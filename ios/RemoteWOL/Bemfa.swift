@@ -64,6 +64,54 @@ enum BemfaError: LocalizedError, Equatable {
 }
 
 /// 巴法云 HTTP 接口。路由器连的是 bemfa.com:8344，对应接口里的 type=3（TCP 设备云）。
+/// 本机发出的一次开机指令。发出后主题里的 on 先是「指令本身」，并不代表电脑已开机；
+/// 路由器约 20 秒后用真实状态重写一次（带新的时间戳），只有晚于指令那条 on 的 on 才算确认开机。
+/// 用巴法云服务器时间比较，不依赖手机时钟。规则与网页 bemfa.js 的 wakeView 一致。
+struct WakeTrack: Equatable {
+    var sentAt: Date
+    var baseUnix: Int? = nil
+}
+
+struct WakeView: Equatable {
+    enum Level { case ok, off, wait, fail, unknown }
+    let label: String
+    let on: Bool
+    let level: Level
+    /// 为 true 时可以忘掉这次开机指令
+    let done: Bool
+}
+
+extension Bemfa {
+    static let wakeWait: TimeInterval = 180
+
+    static func trackWake(_ wake: inout WakeTrack, _ t: BemfaTopic) {
+        if wake.baseUnix == nil, powerState(t.msg) == .on, let unix = t.unix { wake.baseUnix = unix }
+    }
+
+    static func wakeView(_ t: BemfaTopic, _ wake: WakeTrack?, now: Date) -> WakeView {
+        let state = powerState(t.msg)
+        if let wake {
+            if state == .on, let base = wake.baseUnix, let unix = t.unix, unix > base {
+                return WakeView(label: "已开机", on: true, level: .ok, done: true)
+            }
+            let age = now.timeIntervalSince(wake.sentAt)
+            if age < wakeWait {
+                return WakeView(label: state == .on ? "开机中…等待路由器确认" : "开机中…等待电脑响应", on: false, level: .wait, done: false)
+            }
+            if state != .on {
+                return WakeView(label: "电脑没有响应开机指令", on: false, level: .fail, done: age > 600)
+            }
+            // 超时仍只有指令那条 on（例如路由器关闭了状态同步）：无法确认
+            return WakeView(label: "已发送开机指令（无法确认是否已开机）", on: false, level: .unknown, done: true)
+        }
+        switch state {
+        case .on: return WakeView(label: "已开机", on: true, level: .ok, done: true)
+        case .off: return WakeView(label: "已关机", on: false, level: .off, done: true)
+        case .unknown: return WakeView(label: "状态未知", on: false, level: .unknown, done: true)
+        }
+    }
+}
+
 struct Bemfa {
     static let tcp = 3
     static let mqtt = 1

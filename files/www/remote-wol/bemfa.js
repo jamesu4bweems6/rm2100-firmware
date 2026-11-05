@@ -8,7 +8,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
   // 脚本版本：页面据此判断浏览器是否还在用缓存里的旧脚本（固件升级后 uhttpd 不发 Cache-Control）
-  const VERSION = 3;
+  const VERSION = 4;
   const API = 'https://apis.bemfa.com';
   const TCP = 3;    // 路由器连的是 bemfa.com:8344，对应接口里的 type=3
   const MQTT = 1;
@@ -99,6 +99,34 @@
     return 'unknown';
   }
 
+  // 发出开机指令后，主题里的 on 先是「指令本身」，并不代表电脑已开机。路由器在约 20 秒宽限期后
+  // 会用真实状态重写一次（带新的时间戳），所以只有晚于指令那条 on 的 on 才算确认开机。
+  // 用巴法云服务器时间比较，不依赖手机时钟。wake = { sentAt: 本机毫秒, baseUnix: 指令那条 on 的服务器时间 }
+  const WAKE_WAIT_MS = 180000;
+
+  function trackWake(wake, t) {
+    if (wake && wake.baseUnix == null && powerState(t) === 'on' && t.unix) wake.baseUnix = t.unix;
+    return wake;
+  }
+
+  // 返回 { label, on, level: ok|off|wait|fail|unknown, done }；done 为 true 时可以忘掉这次开机指令
+  function wakeView(t, wake, nowMs) {
+    const state = powerState(t);
+    if (wake) {
+      if (state === 'on' && wake.baseUnix != null && t.unix > wake.baseUnix)
+        return { label: '已开机', on: true, level: 'ok', done: true };
+      if (nowMs - wake.sentAt < WAKE_WAIT_MS)
+        return { label: state === 'on' ? '开机中…等待路由器确认' : '开机中…等待电脑响应', on: false, level: 'wait', done: false };
+      if (state !== 'on')
+        return { label: '电脑没有响应开机指令', on: false, level: 'fail', done: nowMs - wake.sentAt > 600000 };
+      // 超时仍只有指令那条 on（例如路由器关闭了状态同步）：无法确认
+      return { label: '已发送开机指令（无法确认是否已开机）', on: false, level: 'unknown', done: true };
+    }
+    if (state === 'on') return { label: '已开机', on: true, level: 'ok', done: true };
+    if (state === 'off') return { label: '已关机', on: false, level: 'off', done: true };
+    return { label: '状态未知', on: false, level: 'unknown', done: true };
+  }
+
   // 检查账号设置，找出米家里看不到设备、远程开机不生效的原因。
   // tcp / mqtt：listTopics 的结果；mqtt 可为 null（查询失败时）。
   function diagnose(tcp, mqtt) {
@@ -131,5 +159,5 @@
     return items;
   }
 
-  return { VERSION, API, TCP, MQTT, KINDS, miKind, validUid, listTopics, topicExists, wake, powerState, diagnose, normalize, topicList };
+  return { VERSION, API, TCP, MQTT, KINDS, WAKE_WAIT_MS, miKind, validUid, listTopics, topicExists, wake, powerState, trackWake, wakeView, diagnose, normalize, topicList };
 });

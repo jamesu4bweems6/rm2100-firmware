@@ -35,6 +35,8 @@ button:disabled { opacity: .5; cursor: default; }
 .pc:first-of-type { border-top: 0; }
 .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--off); flex: none; }
 .dot.on { background: var(--on); box-shadow: 0 0 0 4px color-mix(in srgb, var(--on) 20%, transparent); }
+.dot.wait { background: var(--warn); }
+.dot.fail { background: var(--error); }
 .pc-main { flex: 1; min-width: 0; }
 .pc-name { font-weight: 600; overflow-wrap: anywhere; }
 .pc-meta { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
@@ -86,7 +88,7 @@ ul.diag li.error { border-color: var(--error); }
 
   <p class="hint"><button class="ghost" id="forget" type="button" hidden>清除本机保存的私钥</button></p>
 </main>
-<script src="bemfa.js?v=3"></script>
-<script src="app.js?v=3"></script>
+<script src="bemfa.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

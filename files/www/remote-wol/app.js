@@ -8,6 +8,8 @@
   let timer = null;
   let fastUntil = 0;
   const pending = {};
+  // 本页发出的开机指令：topic -> { sentAt, baseUnix }，用来区分「刚发的 on」和「路由器确认已开机」
+  const wakes = {};
 
   function store(value) {
     try { value ? localStorage.setItem(KEY, value) : localStorage.removeItem(KEY); } catch (e) { /* 隐私模式 */ }
@@ -40,11 +42,16 @@
       return;
     }
     for (const t of topics) {
-      const state = W.powerState(t);
+      const wake = W.trackWake(wakes[t.topic], t);
+      const view = W.wakeView(t, wake, Date.now());
+      if (wake && view.done) delete wakes[t.topic];
+      // 每次刷新都重新给出（刷新开头会清掉上一次的错误提示）
+      if (view.level === 'fail')
+        say('pcs-msg', '「' + (t.name || t.topic) + '」没有响应开机指令。路由器已发出唤醒包，请检查电脑：网线是否连在路由器上、网卡属性里是否开启「魔术包唤醒」和「关机网络唤醒」、网卡 MAC 是否被手动改过（关机后网卡只认出厂 MAC）。', true);
       const row = document.createElement('div');
       row.className = 'pc';
       const dot = document.createElement('span');
-      dot.className = 'dot' + (state === 'on' ? ' on' : '');
+      dot.className = 'dot' + (view.on ? ' on' : view.level === 'wait' ? ' wait' : view.level === 'fail' ? ' fail' : '');
       const main = document.createElement('div');
       main.className = 'pc-main';
       const name = document.createElement('div');
@@ -52,8 +59,7 @@
       name.textContent = t.name || t.topic;
       const meta = document.createElement('div');
       meta.className = 'pc-meta';
-      const label = state === 'on' ? '已开机' : state === 'off' ? '已关机' : '状态未知';
-      meta.append((t.name ? t.topic + ' · ' : '') + label + (t.unix ? ' · ' + ago(t.unix) : '') + ' · ');
+      meta.append((t.name ? t.topic + ' · ' : '') + view.label + (t.unix && !wake ? ' · ' + ago(t.unix) : '') + ' · ');
       const router = document.createElement('span');
       router.textContent = t.online ? '路由器在线' : '路由器离线';
       if (!t.online) router.className = 'bad';
@@ -74,9 +80,9 @@
     try {
       const topics = await W.listTopics(uid, W.TCP);
       topics.sort((a, b) => (W.miKind(b.topic) ? 1 : 0) - (W.miKind(a.topic) ? 1 : 0) || a.topic.localeCompare(b.topic));
-      render(topics);
-      // 只清掉上次的错误；「已发送开机指令」这类提示要留着
+      // 先清掉上次的错误（「已发送开机指令」这类提示要留着），再渲染——渲染时可能给出「没有响应」的新提示
       if ($('pcs-msg').classList.contains('error')) say('pcs-msg', '');
+      render(topics);
       $('pcs-card').hidden = false;
       $('diag-card').hidden = false;
     } catch (e) {
@@ -89,7 +95,7 @@
   function schedule() {
     clearTimeout(timer);
     if (!uid || document.hidden) return;
-    // 刚发过开机指令的两分钟内每 5 秒刷新，平时 20 秒
+    // 刚发过开机指令的 3 分钟内每 5 秒刷新，平时 20 秒
     timer = setTimeout(refresh, Date.now() < fastUntil ? 5000 : 20000);
   }
 
@@ -99,8 +105,9 @@
     btn.textContent = '发送中…';
     try {
       await W.wake(uid, t.topic);
-      say('pcs-msg', '已向「' + (t.name || t.topic) + '」发送开机指令' + (t.online ? '' : '，但路由器当前离线，指令可能送不到') + '。');
-      fastUntil = Date.now() + 120000;
+      wakes[t.topic] = { sentAt: Date.now(), baseUnix: null };
+      say('pcs-msg', '已向「' + (t.name || t.topic) + '」发送开机指令，正在等待电脑响应（通常 30 秒到 1 分钟）' + (t.online ? '' : '；但路由器当前离线，指令可能送不到') + '。');
+      fastUntil = Date.now() + W.WAKE_WAIT_MS;
     } catch (e) {
       say('pcs-msg', '开机失败：' + e.message, true);
     } finally {

@@ -61,7 +61,7 @@ function wakeLocal(name, mac, btn) {
 
 // 巴法云接口与诊断规则和手机网页共用一份：/www/remote-wol/bemfa.js。
 // uhttpd 不给静态文件发 Cache-Control，固件升级后浏览器可能一直用缓存里的旧脚本，所以每次带时间戳加载。
-var BEMFA_VERSION = 3;
+var BEMFA_VERSION = 4;
 var bemfaReady = null;
 function loadBemfa() {
 	if (!bemfaReady)
@@ -333,7 +333,7 @@ return view.extend({
 						E('li', {}, [ _('设备列表里出现“电脑”插座后，点开它就能远程开机，也可以说“小爱同学，打开电脑”。') ])
 					]),
 					E('p', { 'class': 'cbi-section-descr' }, [
-						_('米家里点“关闭”或说“关闭电脑”不会关机：路由器无法替电脑关机，开启状态同步时，3 分钟后开关会变回电脑的真实状态。改了巴法云里的主题或昵称后，需要在米家里重新“同步设备”。')
+						_('米家里点“关闭”或说“关闭电脑”不会关机：路由器无法替电脑关机。开启状态同步时，发出开关指令约 20 秒后开关会变回电脑的真实状态（开机过程中显示为关机，电脑起来后变为开启）。改了巴法云里的主题或昵称后，需要在米家里重新“同步设备”。')
 					]),
 					E('h4', {}, [ _('米家里看不到设备？') ]),
 					E('p', { 'class': 'cbi-section-descr' }, [

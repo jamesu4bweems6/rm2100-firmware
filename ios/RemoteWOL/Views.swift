@@ -42,7 +42,7 @@ struct ContentView: View {
                                 .foregroundStyle(.secondary)
                         }
                         ForEach(model.topics) { topic in
-                            TopicRow(topic: topic, sending: model.sending.contains(topic.topic)) {
+                            TopicRow(topic: topic, view: model.view(for: topic), sending: model.sending.contains(topic.topic)) {
                                 Task { await model.wake(topic) }
                             }
                         }
@@ -97,22 +97,17 @@ struct ContentView: View {
 
 struct TopicRow: View {
     let topic: BemfaTopic
+    /// 由 AppModel.view(for:) 给出：开机指令发出后先是「开机中」，路由器确认后才是「已开机」
+    let view: WakeView
     let sending: Bool
     let action: () -> Void
-
-    private var stateText: String {
-        switch topic.power {
-        case .on: return "已开机"
-        case .off: return "已关机"
-        case .unknown: return "状态未知"
-        }
-    }
 
     private var subtitle: String {
         var parts: [String] = []
         if !topic.name.isEmpty { parts.append(topic.topic) }
-        parts.append(stateText)
-        if let unix = topic.unix {
+        parts.append(view.label)
+        // 开机过程中不显示「多久前」：那是指令本身的时间，容易误会
+        if let unix = topic.unix, view.level == .ok || view.level == .off {
             let formatter = RelativeDateTimeFormatter()
             formatter.unitsStyle = .short
             parts.append(formatter.localizedString(for: Date(timeIntervalSince1970: TimeInterval(unix)), relativeTo: Date()))
@@ -120,10 +115,19 @@ struct TopicRow: View {
         return parts.joined(separator: " · ")
     }
 
+    private var dotColor: Color {
+        switch view.level {
+        case .ok: return .green
+        case .wait: return .orange
+        case .fail: return .red
+        case .off, .unknown: return Color.gray.opacity(0.45)
+        }
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             Circle()
-                .fill(topic.power == .on ? Color.green : Color.gray.opacity(0.45))
+                .fill(dotColor)
                 .frame(width: 12, height: 12)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {

@@ -60,7 +60,26 @@ async function unit() {
   assert.equal(await W.topicExists(UID, 'ghost001', fakeFetch([['getmsg', { code: 40004, message: 'Uid or topic err' }]])), false);
   assert.equal(await W.topicExists(UID, 'pc001', fakeFetch([])), null, '网络错误时不下结论');
   assert.equal(await W.topicExists(UID, 'pc/001', fakeFetch([])), false);
-  assert.equal(W.VERSION, 3);
+  assert.equal(W.VERSION, 4);
+  // 开机指令后的状态显示：只有晚于指令那条 on 的 on 才算确认开机；用服务器时间，不看手机时钟
+  const at = (msg, unix) => ({ topic: 'pc001', msg, unix });
+  const w = { sentAt: 1000000, baseUnix: null };
+  W.trackWake(w, at('off', 50));
+  assert.equal(w.baseUnix, null, '指令还没生效时不记录基准');
+  W.trackWake(w, at('on', 9000));
+  assert.equal(w.baseUnix, 9000);
+  W.trackWake(w, at('on', 9100));
+  assert.equal(w.baseUnix, 9000, '基准只记第一次');
+  const view = (msg, unix, now) => W.wakeView(at(msg, unix), w, now);
+  assert.deepEqual(view('on', 9000, 1010000), { label: '开机中…等待路由器确认', on: false, level: 'wait', done: false });
+  assert.equal(view('off', 9020, 1030000).label, '开机中…等待电脑响应');
+  assert.deepEqual(view('on', 9060, 1070000), { label: '已开机', on: true, level: 'ok', done: true });
+  assert.deepEqual(view('off', 9020, 1000000 + W.WAKE_WAIT_MS + 1), { label: '电脑没有响应开机指令', on: false, level: 'fail', done: false });
+  assert.equal(view('off', 9020, 1000000 + 600001).done, true, '10 分钟后忘掉这次指令');
+  assert.equal(view('on', 9000, 1000000 + W.WAKE_WAIT_MS + 1).level, 'unknown', '路由器没写回（关闭同步）时无法确认');
+  assert.equal(W.wakeView(at('on', 1), null, 0).label, '已开机');
+  assert.equal(W.wakeView(at('off', 1), null, 0).label, '已关机');
+  assert.equal(W.wakeView(at('', 1), null, 0).label, '状态未知');
   await assert.rejects(W.listTopics(UID, W.TCP, fakeFetch([['allTopic', { code: -1, msg: '获取失败' }]])), /私钥不正确/);
   await assert.rejects(W.listTopics(UID, W.TCP, fakeFetch([])), /连不上巴法云/);
   await assert.rejects(W.listTopics('bad uid', W.TCP, fakeFetch([])), /私钥/);
@@ -118,7 +137,9 @@ async function browser() {
     page.on('pageerror', e => errors.push(e.message));
     page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
     page.on('request', r => { const u = new URL(r.url()); if (u.origin !== new URL(base).origin && u.host !== 'apis.bemfa.com') external.push(r.url()); });
-    let state = 'off';
+    // pc001 的最后一条消息与巴法云服务器时间，测试里模拟路由器的写回
+    let pcMsg = 'off', pcUnix = Math.floor(Date.now() / 1000) - 30;
+    const T0 = Math.floor(Date.now() / 1000) + 3600;  // 故意与本机时钟错开，确认不依赖手机时间
     await context.route('https://apis.bemfa.com/**', async route => {
       const url = new URL(route.request().url());
       const json = body => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(body) });
@@ -128,13 +149,13 @@ async function browser() {
         if (url.searchParams.get('openID') !== UID) return json({ code: -1, msg: '获取失败', data: '' });
         if (url.searchParams.get('type') === '1') return json(wrap([{ topic: 'light002', msg: 'off' }]));
         return json(wrap([
-          { topic: 'pc001', name: '书房电脑', msg: state, online: true, unix: Math.floor(Date.now() / 1000) - 30 },
+          { topic: 'pc001', name: '书房电脑', msg: pcMsg, online: true, unix: pcUnix },
           { topic: 'nas', name: '<img src=x onerror=alert(1)>', msg: 'off', online: false, unix: 0 }
         ]));
       }
       if (url.pathname === '/va/postJsonMsg') {
         posts.push(JSON.parse(route.request().postData()));
-        state = 'on';
+        pcMsg = 'on'; pcUnix = T0;  // 指令本身把主题改成 on
         return json({ code: 0, message: 'OK', data: 0 });
       }
       return route.fulfill({ status: 404, body: '' });
@@ -166,9 +187,22 @@ async function browser() {
     await page.locator('.pc').first().getByRole('button', { name: '开机' }).click();
     await page.waitForFunction(() => document.querySelector('#pcs-msg').textContent.includes('已向「书房电脑」发送开机指令'));
     assert.deepEqual(posts, [{ uid: UID, topic: 'pc001', type: 3, msg: 'on' }]);
-    await page.waitForFunction(() => document.querySelector('.pc').textContent.includes('已开机'));
+    const firstRow = () => page.locator('.pc').first().textContent();
+    // 指令本身的 on 不能显示成「已开机」
+    await page.waitForFunction(() => document.querySelector('.pc').textContent.includes('开机中…等待路由器确认'));
+    assert.doesNotMatch(await firstRow(), /已开机/);
+    assert.equal(await page.locator('.pc .dot.wait').count(), 1);
+    // 路由器宽限期后写回真实状态 off：电脑还在启动
+    pcMsg = 'off'; pcUnix = T0 + 20;
+    await page.click('#refresh');
+    await page.waitForFunction(() => document.querySelector('.pc').textContent.includes('开机中…等待电脑响应'));
+    // 电脑起来，路由器写回 on（时间戳晚于指令）：确认已开机
+    pcMsg = 'on'; pcUnix = T0 + 60;
+    await page.click('#refresh');
+    await page.waitForFunction(() => /书房电脑pc001 · 已开机/.test(document.querySelector('.pc').textContent));
     assert.equal(await page.locator('.pc .dot.on').count(), 1);
-    console.log('PASS 网页：保存私钥、列出电脑与状态、发送开机指令后刷新为已开机、昵称不当 HTML');
+    assert.match(await page.textContent('#pcs-msg'), /已向「书房电脑」发送开机指令/, '确认开机前提示不被清掉');
+    console.log('PASS 网页：保存私钥、列出电脑与状态、开机指令后显示「开机中」直到路由器确认、昵称不当 HTML');
 
     await page.click('#check');
     await page.waitForSelector('#diag li');
@@ -209,7 +243,7 @@ async function browser() {
 
 // LuCI 页面的开机卡片与「检查巴法云」：在真实浏览器里用最小桩函数加载视图源码
 async function luci(b, base) {
-  const VIEW = fs.readFileSync(path.join(__dirname, '..', 'files', 'www', 'luci-static', 'resources', 'view', 'remote-wol-v3.js'), 'utf8');
+  const VIEW = fs.readFileSync(path.join(__dirname, '..', 'files', 'www', 'luci-static', 'resources', 'view', 'remote-wol-v4.js'), 'utf8');
   const BEMFA = fs.readFileSync(path.join(WEB, 'bemfa.js'), 'utf8');
   const context = await b.newContext();
   const page = await context.newPage();
@@ -303,7 +337,7 @@ async function luci(b, base) {
   assert.doesNotMatch(text, /hidden006 在巴法云“TCP 设备云”里不存在/);
   assert.doesNotMatch(text, /pc001 在巴法云/);
   assert.match(text, /同步设备/);
-  assert.match(text, /诊断脚本版本 3/);
+  assert.match(text, /诊断脚本版本 4/);
   assert.doesNotMatch(text, /off001/, '停用的电脑不参与检查');
   assert.equal(normal.disabled, false, '检查结束后恢复按钮');
   assert.ok(scripts.length && scripts.every(u => /bemfa\.js\?t=\d+$/.test(u)), '每次带时间戳加载诊断脚本，避开浏览器缓存：' + scripts.join(' '));
