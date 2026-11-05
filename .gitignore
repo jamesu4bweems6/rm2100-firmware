@@ -3,3 +3,9 @@ firmware-out/
 # Python test caches
 __pycache__/
 *.pyc
+
+# iOS：工程由 XcodeGen 从 ios/project.yml 生成，构建产物不入库
+ios/*.xcodeproj/
+ios/build/
+ios/out/
+ios/RemoteWOL/Info.plist

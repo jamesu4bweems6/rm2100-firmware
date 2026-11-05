@@ -1,0 +1,84 @@
+name: Build iOS app (unsigned IPA)
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: "App version (CFBundleShortVersionString)"
+        required: false
+        default: "1.0.0"
+  push:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+
+jobs:
+  ios:
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          # 有更新的 Xcode（例如带 iOS 27 SDK）时自动用最新的；最低部署版本 iOS 17，iOS 27 上可直接运行
+          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -n1)
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+          echo "iOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec project.yml
+
+      - name: Unit tests on simulator
+        working-directory: ios
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          for runtime in sorted(devices, reverse=True):
+              if "iOS" not in runtime:
+                  continue
+              for d in devices[runtime]:
+                  if d["name"].startswith("iPhone"):
+                      print(d["udid"]); sys.exit()
+          sys.exit("no iPhone simulator")')
+          echo "simulator: $UDID"
+          set -o pipefail
+          xcodebuild test -project RemoteWOL.xcodeproj -scheme RemoteWOL -destination "id=$UDID" \
+            -derivedDataPath build/test CODE_SIGN_IDENTITY=- | tee build/test.log | grep -E "Test (Case|Suite)|error:|failed|passed" || true
+          grep -q "\*\* TEST SUCCEEDED \*\*" build/test.log
+
+      - name: Build unsigned IPA
+        working-directory: ios
+        run: |
+          VER="${{ github.event.inputs.app_version || '1.0.0' }}"
+          set -o pipefail
+          xcodebuild build -project RemoteWOL.xcodeproj -scheme RemoteWOL -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/release \
+            MARKETING_VERSION="$VER" CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" | tail -n 30
+          APP=build/release/Build/Products/Release-iphoneos/RemoteWOL.app
+          test -x "$APP/RemoteWOL"
+          # 不签名：确认包里没有签名残留，用户用自己的证书重签
+          test ! -e "$APP/_CodeSignature"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' -c 'Print :CFBundleShortVersionString' -c 'Print :MinimumOSVersion' -c 'Print :DTPlatformVersion' "$APP/Info.plist"
+          lipo -info "$APP/RemoteWOL"
+          test -e "$APP/Metadata.appintents" || echo "注意：未生成 App Intents 元数据，Siri 快捷指令可能不可用"
+          mkdir -p out/Payload
+          cp -R "$APP" out/Payload/
+          (cd out && zip -qry "RemoteWOL-$VER-unsigned.ipa" Payload && shasum -a 256 "RemoteWOL-$VER-unsigned.ipa" > "RemoteWOL-$VER-unsigned.ipa.sha256")
+          ls -la out
+          cat out/*.sha256
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteWOL-ios-unsigned
+          path: |
+            ios/out/*.ipa
+            ios/out/*.sha256
+          retention-days: 30
