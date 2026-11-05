@@ -427,7 +427,11 @@ class DaemonTests(unittest.TestCase):
 
 
 class FileTests(unittest.TestCase):
-    FILES = [INIT, DEFAULTS, DAEMON, WAKE, VIEW, ACL, MENU, UCITRACK, CONFIG, ROOT / 'docs/remote-wol.md']
+    WEB = ROOT / 'files/www/remote-wol'
+    FILES = [INIT, DEFAULTS, DAEMON, WAKE, VIEW, ACL, MENU, UCITRACK, CONFIG, ROOT / 'docs/remote-wol.md',
+             WEB / 'index.html', WEB / 'app.js', WEB / 'bemfa.js', ROOT / 'tests/test_remote_wol_web.cjs',
+             ROOT / 'ios/project.yml', ROOT / '.github/workflows/ios.yml',
+             *sorted((ROOT / 'ios').rglob('*.swift')), *sorted((ROOT / 'ios').rglob('Contents.json'))]
 
     def test_text_files(self):
         for path in self.FILES:
@@ -474,6 +478,40 @@ class FileTests(unittest.TestCase):
         for path in ['etc/init.d/remote-wol', 'etc/uci-defaults/90-remote-wol', 'usr/share/remote-wol/bemfa.uc',
                      'usr/share/remote-wol/wake']:
             self.assertIn('ib/files/' + path, build)
+        self.assertIn('node tests/test_remote_wol_web.cjs', build)
+        for path in ['www/remote-wol/index.html', 'www/remote-wol/app.js', 'www/remote-wol/bemfa.js']:
+            self.assertIn(path, build, '镜像核对要包含远程开机网页')
+
+    def test_web_page_assets(self):
+        html = (self.WEB / 'index.html').read_text(encoding='utf-8')
+        self.assertEqual(re.findall(r'<script src="([^"]+)"', html), ['bemfa.js', 'app.js'])
+        # 网页只允许连巴法云，脚本只能来自同源
+        csp = re.search(r'Content-Security-Policy" content="([^"]+)"', html)[1]
+        self.assertIn("default-src 'self'", csp)
+        self.assertIn('connect-src https://apis.bemfa.com', csp)
+        self.assertNotIn('unsafe-eval', csp)
+        for name in ['bemfa.js', 'app.js']:
+            result = subprocess.run(['node', '--check', str(self.WEB / name)], capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+        app = (self.WEB / 'app.js').read_text(encoding='utf-8')
+        self.assertNotIn('innerHTML', app, '巴法云返回的昵称必须按文本显示')
+        self.assertIn("'/remote-wol/bemfa.js'", VIEW.read_text(encoding='utf-8'), 'LuCI 与网页共用同一份诊断脚本')
+
+    def test_ios_project(self):
+        project = (ROOT / 'ios/project.yml').read_text(encoding='utf-8')
+        self.assertIn('PRODUCT_BUNDLE_IDENTIFIER: com.rm2100.remotewol', project)
+        self.assertIn('CFBundleDisplayName: 远程开机', project)
+        workflow = (ROOT / '.github/workflows/ios.yml').read_text(encoding='utf-8')
+        self.assertIn('CODE_SIGNING_ALLOWED=NO', workflow, 'IPA 不签名，由用户自签')
+        self.assertIn('xcodebuild test', workflow)
+        swift = '\n'.join(p.read_text(encoding='utf-8') for p in (ROOT / 'ios').rglob('*.swift'))
+        # App 与网页使用同一组巴法云接口和米家规则
+        for needle in ['vb/api/v2/allTopic', 'va/postJsonMsg', '"type": Bemfa.tcp', '"001": "插座"', '"006": "开关"']:
+            self.assertIn(needle, swift)
+        self.assertIn('kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly', swift, '私钥存钥匙串且不随备份迁移')
+        icon = (ROOT / 'ios/RemoteWOL/Assets.xcassets/AppIcon.appiconset/icon.png').read_bytes()
+        self.assertEqual(icon[:8], b'\x89PNG\r\n\x1a\n')
+        self.assertEqual(int.from_bytes(icon[16:20], 'big'), 1024)
 
 
 if __name__ == '__main__':

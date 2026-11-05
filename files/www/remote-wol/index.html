@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://apis.bemfa.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="远程开机">
+<title>远程开机</title>
+<style>
+:root {
+  --bg: #f4f5f7; --card: #fff; --text: #1d1f23; --muted: #6b7280; --line: #e5e7eb;
+  --primary: #2563eb; --on: #16a34a; --off: #9ca3af; --warn: #d97706; --error: #dc2626;
+  --radius: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111317; --card: #1b1e24; --text: #eceef2; --muted: #9aa1ad; --line: #2b3038; --primary: #4f8cff; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+main { max-width: 640px; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 16px 32px; }
+h1 { font-size: 24px; margin: 8px 0 4px; }
+h2 { font-size: 17px; margin: 0 0 12px; }
+.sub { color: var(--muted); margin: 0 0 16px; font-size: 14px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 14px; }
+label { display: block; font-size: 14px; color: var(--muted); margin-bottom: 6px; }
+.row { display: flex; gap: 8px; align-items: center; }
+input { flex: 1; min-width: 0; font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+button { font: inherit; border: 0; border-radius: 10px; padding: 10px 16px; background: var(--primary); color: #fff; cursor: pointer; min-height: 44px; }
+button.ghost { background: transparent; color: var(--primary); border: 1px solid var(--line); }
+button:disabled { opacity: .5; cursor: default; }
+.pc { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.pc:first-of-type { border-top: 0; }
+.dot { width: 12px; height: 12px; border-radius: 50%; background: var(--off); flex: none; }
+.dot.on { background: var(--on); box-shadow: 0 0 0 4px color-mix(in srgb, var(--on) 20%, transparent); }
+.pc-main { flex: 1; min-width: 0; }
+.pc-name { font-weight: 600; overflow-wrap: anywhere; }
+.pc-meta { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.pc-meta .bad { color: var(--warn); }
+.empty, .hint { color: var(--muted); font-size: 14px; }
+.msg { font-size: 14px; margin-top: 10px; min-height: 1.5em; }
+.msg.error { color: var(--error); }
+ul.diag { list-style: none; padding: 0; margin: 12px 0 0; }
+ul.diag li { padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; font-size: 14px; background: var(--bg); border-left: 4px solid var(--muted); overflow-wrap: anywhere; }
+ul.diag li.ok { border-color: var(--on); }
+ul.diag li.warn { border-color: var(--warn); }
+ul.diag li.error { border-color: var(--error); }
+.top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>远程开机</h1>
+  <p class="sub">通过巴法云给家里路由器发指令，唤醒网线连接的电脑。私钥只保存在这台设备的浏览器里。</p>
+
+  <section class="card" id="setup">
+    <label for="uid">巴法云私钥（控制台左上角的 UID）</label>
+    <div class="row">
+      <input id="uid" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="32 位字母和数字">
+      <button id="save" type="button">保存</button>
+    </div>
+    <p class="msg" id="setup-msg"></p>
+  </section>
+
+  <section class="card" id="pcs-card" hidden>
+    <div class="top">
+      <h2>电脑</h2>
+      <button class="ghost" id="refresh" type="button">刷新</button>
+    </div>
+    <div id="pcs"></div>
+    <p class="msg" id="pcs-msg"></p>
+    <p class="hint">状态由路由器每 30 秒检测一次并同步到巴法云；开机通常需要 30 秒到 1 分钟。</p>
+  </section>
+
+  <section class="card" id="diag-card" hidden>
+    <div class="top">
+      <h2>米家里看不到设备？</h2>
+      <button class="ghost" id="check" type="button">检查巴法云</button>
+    </div>
+    <p class="hint">检查主题命名、昵称和路由器在线状态，找出米家不显示设备、远程开机不生效的原因。</p>
+    <ul class="diag" id="diag"></ul>
+  </section>
+
+  <p class="hint"><button class="ghost" id="forget" type="button" hidden>清除本机保存的私钥</button></p>
+</main>
+<script src="bemfa.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -14,7 +14,7 @@ on:
       fw_version:
         description: "Firmware version stamp (written to /etc/campus-fix-version and artifact name)"
         required: false
-        default: "2.13.0"
+        default: "2.14.0"
 
 env:
   PROFILE: xiaomi_redmi-router-ac2100
@@ -120,6 +120,8 @@ jobs:
             node tests/test_lan_transfer_browser.cjs
           NODE_PATH=/tmp/lt-browser/node_modules LAN_TRANSFER_URL="http://$LAN_IP:8765/" \
             node tests/test_lan_speed_browser.cjs
+          # 远程开机网页与 LuCI 开机卡片：模拟巴法云接口，不访问外网
+          NODE_PATH=/tmp/lt-browser/node_modules REMOTE_WOL_SCREENSHOTS=/tmp/lt-shots node tests/test_remote_wol_web.cjs
 
       - name: Upload LAN transfer screenshots
         if: always()
@@ -185,7 +187,7 @@ jobs:
           # 私钥存在这里，镜像里就只给 root 读
           chmod 0600 ib/files/etc/config/remote-wol
           # stamp the firmware version into the overlay
-          FWV="${{ github.event.inputs.fw_version || '2.13.0' }}"
+          FWV="${{ github.event.inputs.fw_version || '2.14.0' }}"
           echo "$FWV" > ib/files/etc/campus-fix-version
           sed -i "s|^echo \".*\" > /etc/campus-fix-version|echo \"$FWV\" > /etc/campus-fix-version|"             ib/files/etc/uci-defaults/99-campus-fix-banner
           echo "firmware version: $FWV"
@@ -257,7 +259,7 @@ jobs:
         run: |
           # campus-fix vX.Y.Z 前缀：下载下来一眼可辨版本（breed 刷机界面
           # 只显示文件名，原名一串 openwrt-24.10.2-ramips-... 容易刷错包）
-          FWV="${{ github.event.inputs.fw_version || '2.13.0' }}"
+          FWV="${{ github.event.inputs.fw_version || '2.14.0' }}"
           cd ib/bin/targets/*/*/
           for f in openwrt-*-xiaomi_redmi-router-ac2100-*.bin \
                    openwrt-*-xiaomi_redmi-router-ac2100.manifest; do
@@ -297,7 +299,8 @@ jobs:
           for f in etc/init.d/remote-wol etc/config/remote-wol etc/uci-defaults/90-remote-wol \
                    usr/share/remote-wol/bemfa.uc usr/share/remote-wol/wake \
                    usr/share/luci/menu.d/luci-app-remote-wol.json usr/share/rpcd/acl.d/luci-app-remote-wol.json \
-                   usr/share/ucitrack/remote-wol.json www/luci-static/resources/view/remote-wol.js; do
+                   usr/share/ucitrack/remote-wol.json www/luci-static/resources/view/remote-wol.js \
+                   www/remote-wol/index.html www/remote-wol/app.js www/remote-wol/bemfa.js; do
             unsquashfs -cat "$root" "$f" > "$work/check" || { echo "镜像缺少 $f" >&2; exit 1; }
             cmp "$work/check" "$GITHUB_WORKSPACE/files/$f" || { echo "镜像内容与仓库不一致：$f" >&2; exit 1; }
           done
@@ -312,7 +315,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rm2100-firmware-v${{ github.event.inputs.fw_version || '2.13.0' }}-openwrt-${{ github.event.inputs.openwrt_version || '24.10.2' }}
+          name: rm2100-firmware-v${{ github.event.inputs.fw_version || '2.14.0' }}-openwrt-${{ github.event.inputs.openwrt_version || '24.10.2' }}
           path: |
             ib/bin/targets/*/*/campus-fix-v*-xiaomi_redmi-router-ac2100-squashfs-kernel1.bin
             ib/bin/targets/*/*/campus-fix-v*-xiaomi_redmi-router-ac2100-squashfs-rootfs0.bin

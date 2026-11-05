@@ -44,6 +44,36 @@ function readStatus() {
 	});
 }
 
+// 本地开机：直接调用唤醒脚本发魔术包，不经过巴法云，路由器没连上云也能用
+function wakeLocal(name, mac, btn) {
+	btn.disabled = true;
+	return fs.exec('/usr/share/remote-wol/wake', [ mac ]).then(function(res) {
+		if (res.code == 0)
+			ui.addNotification(null, E('p', {}, [ _('已向“%s”（%s）发送开机魔术包，电脑通常 30 秒到 1 分钟内开机。').format(name, mac) ]), 'info');
+		else
+			ui.addNotification(null, E('p', {}, [ _('开机失败：%s').format(res.stderr || res.code) ]), 'error');
+	}).catch(function(err) {
+		ui.addNotification(null, E('p', {}, [ _('开机失败：%s').format(err) ]), 'error');
+	}).finally(function() {
+		btn.disabled = false;
+	});
+}
+
+// 巴法云接口与诊断规则和手机网页共用一份：/www/remote-wol/bemfa.js
+var bemfaReady = null;
+function loadBemfa() {
+	if (!bemfaReady)
+		bemfaReady = new Promise(function(resolve, reject) {
+			if (window.RemoteWol)
+				return resolve(window.RemoteWol);
+			var script = E('script', { 'src': '/remote-wol/bemfa.js' });
+			script.onload = function() { window.RemoteWol ? resolve(window.RemoteWol) : reject(new Error(_('诊断脚本加载失败'))); };
+			script.onerror = function() { bemfaReady = null; reject(new Error(_('诊断脚本加载失败'))); };
+			document.head.appendChild(script);
+		});
+	return bemfaReady;
+}
+
 return view.extend({
 	load: function() {
 		return Promise.all([
@@ -51,6 +81,87 @@ return view.extend({
 			L.resolveDefault(callHostHints(), {}),
 			readStatus()
 		]);
+	},
+
+	renderPower: function(info) {
+		var s = info.status, hosts = [];
+
+		uci.sections('remote-wol', 'host', function(h) {
+			if (h.mac && h.enabled != '0')
+				hosts.push(h);
+		});
+		if (!hosts.length)
+			return E('p', {}, [ _('还没有添加电脑。在下方“电脑”表格里填写名称、MAC 地址和巴法云主题，保存并应用后这里会出现开机按钮。') ]);
+
+		return E('table', { 'class': 'table' }, [
+			E('tr', { 'class': 'tr table-titles' }, [
+				E('th', { 'class': 'th' }, [ _('电脑') ]),
+				E('th', { 'class': 'th' }, [ _('状态') ]),
+				E('th', { 'class': 'th' }, [ _('MAC 地址') ]),
+				E('th', { 'class': 'th' }, [ ' ' ])
+			])
+		].concat(hosts.map(function(h) {
+			var name = h.name || h.topic || h.mac,
+			    probe = (s && s.sync && s.hosts) ? s.hosts[h.topic] : null,
+			    state, color;
+			if (!probe)
+				state = s && !s.sync ? _('未开启状态同步') : _('未知');
+			else if (probe.online == null)
+				state = _('检测中…');
+			else
+				state = probe.online ? _('已开机') : _('已关机');
+			color = probe && probe.online ? '#16a34a' : 'inherit';
+			var btn = E('button', {
+				'class': 'btn cbi-button cbi-button-apply',
+				'click': function(ev) { return wakeLocal(name, h.mac, ev.currentTarget); }
+			}, [ _('开机') ]);
+			return E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td', 'data-title': _('电脑') }, [ E('strong', {}, [ name ]) ]),
+				E('td', { 'class': 'td', 'data-title': _('状态'), 'style': 'color:' + color }, [
+					state + (probe && probe.ip ? '（' + probe.ip + '）' : '')
+				]),
+				E('td', { 'class': 'td', 'data-title': _('MAC 地址') }, [ h.mac ]),
+				E('td', { 'class': 'td cbi-section-actions' }, [ btn ])
+			]);
+		})));
+	},
+
+	checkBemfa: function(box, btn) {
+		var uid = uci.get('remote-wol', 'main', 'uid') || '',
+		    configured = [];
+		uci.sections('remote-wol', 'host', function(h) {
+			if (h.topic && h.enabled != '0') configured.push(h.topic);
+		});
+		var show = function(items) {
+			box.replaceChildren.apply(box, items.map(function(i) {
+				var colors = { ok: '#16a34a', info: '#6b7280', warn: '#d97706', error: '#dc2626' };
+				return E('li', { 'style': 'margin:6px 0;padding-left:8px;border-left:4px solid ' + (colors[i.level] || '#6b7280') }, [ i.text ]);
+			}));
+		};
+		if (!uid) {
+			show([ { level: 'error', text: _('请先在上面填写巴法云私钥，保存并应用后再检查。') } ]);
+			return Promise.resolve();
+		}
+		btn.disabled = true;
+		show([ { level: 'info', text: _('正在查询巴法云…') } ]);
+		return loadBemfa().then(function(W) {
+			return Promise.all([
+				W.listTopics(uid, W.TCP).catch(function(e) { if (/私钥/.test(e.message)) return []; throw e; }),
+				W.listTopics(uid, W.MQTT).catch(function() { return null; })
+			]).then(function(res) {
+				var items = [], names = res[0].map(function(t) { return t.topic; });
+				// 路由器订阅不会自动在控制台建主题；没建的主题米家里也不会有
+				configured.forEach(function(t) {
+					if (names.indexOf(t) < 0)
+						items.push({ level: 'error', text: _('路由器里填的主题 %s 在巴法云“TCP 设备云”里不存在：请到控制台新建同名主题，再到米家里同步设备。').format(t) });
+				});
+				show(items.concat(W.diagnose(res[0], res[1])));
+			});
+		}).catch(function(e) {
+			show([ { level: 'error', text: e.message } ]);
+		}).finally(function() {
+			btn.disabled = false;
+		});
 	},
 
 	renderStatus: function(info) {
@@ -97,10 +208,12 @@ return view.extend({
 		var hints = data[1] || {},
 		    self = this,
 		    statusBox = E('div', {}, [ this.renderStatus(data[2]) ]),
+		    powerBox = E('div', {}, [ this.renderPower(data[2]) ]),
+		    diagBox = E('ul', { 'class': 'remote-wol-diag' }),
 		    m, s, o;
 
-		m = new form.Map('remote-wol', _('远程开机'),
-			_('路由器主动连接巴法云并订阅主题，不需要公网 IP。在巴法云 App、微信小程序或米家（小爱同学）里向主题发送“on”，路由器就向对应电脑发送网络唤醒（WoL）魔术包。电脑需用网线连接路由器，并在 BIOS 和网卡设置中开启网络唤醒。'));
+		// 页面标题和说明放在开机卡片上方，表单本身不再重复标题
+		m = new form.Map('remote-wol');
 
 		s = m.section(form.NamedSection, 'main', 'remote-wol', _('巴法云'));
 		s.addremove = false;
@@ -158,34 +271,33 @@ return view.extend({
 			return dup ? _('主题不能重复') : true;
 		};
 
-		o = s.option(form.Button, '_wake', _('本地测试'));
-		o.inputtitle = _('立即唤醒');
-		o.inputstyle = 'apply';
-		o.modalonly = false;
-		o.onclick = function(ev, section_id) {
-			var mac = this.section.formvalue(section_id, 'mac') || uci.get('remote-wol', section_id, 'mac');
-			if (!mac)
-				return ui.addNotification(null, E('p', {}, [ _('请先填写 MAC 地址') ]), 'warning');
-			return fs.exec('/usr/share/remote-wol/wake', [ mac ]).then(function(res) {
-				if (res.code == 0)
-					ui.addNotification(null, E('p', {}, [ _('已向 %s 发送魔术包').format(mac) ]), 'info');
-				else
-					ui.addNotification(null, E('p', {}, [ _('发送失败：%s').format(res.stderr || res.code) ]), 'error');
-			}).catch(function(err) {
-				ui.addNotification(null, E('p', {}, [ _('发送失败：%s').format(err) ]), 'error');
-			});
-		};
-
 		poll.add(function() {
 			return readStatus().then(function(info) {
 				statusBox.replaceChildren(self.renderStatus(info));
+				powerBox.replaceChildren(self.renderPower(info));
 			});
 		}, 5);
 
 		return m.render().then(function(mapEl) {
+			var webUrl = window.location.protocol + '//' + window.location.host + '/remote-wol/',
+			    checkBtn = E('button', { 'class': 'btn cbi-button cbi-button-action' }, [ _('检查巴法云') ]);
+			checkBtn.addEventListener('click', function() { return self.checkBemfa(diagBox, checkBtn); });
 			return E([], [
-				mapEl,
+				E('h2', { 'name': 'content' }, [ _('远程开机') ]),
+				E('div', { 'class': 'cbi-map-descr' }, [
+					_('路由器主动连接巴法云并订阅主题，不需要公网 IP。在手机网页、巴法云 App 或米家（小爱同学）里发出开机指令，路由器就向对应电脑发送网络唤醒（WoL）魔术包。电脑需用网线连接路由器，并在 BIOS 和网卡设置中开启网络唤醒。')
+				]),
+				E('div', { 'class': 'cbi-section' }, [
+					E('h3', {}, [ _('开机') ]),
+					powerBox,
+					E('p', { 'class': 'cbi-section-descr' }, [
+						_('这里的“开机”直接从路由器发魔术包，不经过巴法云。人不在家时用手机打开远程开机网页：'),
+						E('a', { 'href': webUrl, 'target': '_blank', 'rel': 'noopener noreferrer' }, [ webUrl ]),
+						_('（局域网内可直接打开；人在外面时用 iOS App）。')
+					])
+				]),
 				E('div', { 'class': 'cbi-section' }, [ E('h3', {}, [ _('运行状态') ]), statusBox ]),
+				mapEl,
 				E('div', { 'class': 'cbi-section' }, [
 					E('h3', {}, [ _('接入米家 / 小爱同学') ]),
 					E('ol', {}, [
@@ -196,7 +308,13 @@ return view.extend({
 					]),
 					E('p', { 'class': 'cbi-section-descr' }, [
 						_('米家里点“关闭”或说“关闭电脑”不会关机：路由器无法替电脑关机，开启状态同步时，3 分钟后开关会变回电脑的真实状态。改了巴法云里的主题或昵称后，需要在米家里重新“同步设备”。')
-					])
+					]),
+					E('h4', {}, [ _('米家里看不到设备？') ]),
+					E('p', { 'class': 'cbi-section-descr' }, [
+						_('点下面的按钮，用已保存的私钥查询巴法云，检查主题是否存在、命名是否符合米家规则、是否设置了昵称、路由器是否在线订阅。')
+					]),
+					E('p', {}, [ checkBtn ]),
+					diagBox
 				])
 			]);
 		});
