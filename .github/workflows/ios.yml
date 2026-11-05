@@ -47,9 +47,13 @@ jobs:
                       print(d["udid"]); sys.exit()
           sys.exit("no iPhone simulator")')
           echo "simulator: $UDID"
-          set -o pipefail
+          # tee 先于 xcodebuild 打开日志文件，目录要提前建好
+          mkdir -p build
+          rc=0
           xcodebuild test -project RemoteWOL.xcodeproj -scheme RemoteWOL -destination "id=$UDID" \
-            -derivedDataPath build/test CODE_SIGN_IDENTITY=- | tee build/test.log | grep -E "Test (Case|Suite)|error:|failed|passed" || true
+            -derivedDataPath build/test CODE_SIGN_IDENTITY=- > build/test.log 2>&1 || rc=$?
+          grep -E "Test (Case|Suite)|error:|TEST (SUCCEEDED|FAILED)" build/test.log || true
+          [ "$rc" = 0 ] || { tail -n 80 build/test.log; exit "$rc"; }
           grep -q "\*\* TEST SUCCEEDED \*\*" build/test.log
 
       - name: Build unsigned IPA
