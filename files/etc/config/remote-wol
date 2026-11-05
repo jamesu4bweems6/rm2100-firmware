@@ -1,0 +1,6 @@
+config remote-wol 'main'
+	option enabled '0'
+	option uid ''
+	option server 'bemfa.com'
+	option port '8344'
+	option sync_state '1'

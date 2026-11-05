@@ -3,9 +3,11 @@
 红米 RM AC2100（MediaTek MT7621A，128MB RAM / 16MB flash）专用 OpenWrt 固件，
 内置**校园网多设备检测规避**套件，通过 GitHub Actions 云端构建，本机无需 Linux 环境。
 
-**当前固件版本：v2.12.0**（刷入后 `cat /etc/campus-fix-version` 查询；LuCI 页脚也显示 `campus-fix vX.Y.Z`）
+**当前固件版本：v2.13.0**（刷入后 `cat /etc/campus-fix-version` 查询；LuCI 页脚也显示 `campus-fix vX.Y.Z`）
 
 **内网文件互传「邻传」**：连在这台路由器上的手机、电脑用浏览器打开 `http://路由器LAN地址:8080/`（默认 [192.168.1.1:8080](http://192.168.1.1:8080/)）就能互相看到，直接发文件和文字，不用装应用、不用登录后台、不经过外网。详见下方「内网文件互传」一节和 [使用、安装与验证说明](docs/lan-transfer.md)。
+
+**远程开机**：路由器没有公网 IP 也能用手机（巴法云 App / 小程序 / 小爱同学）远程唤醒网线连接的电脑。详见下方「远程开机」一节和 [设置说明](docs/remote-wol.md)。
 
 ## 功能总览
 
@@ -99,6 +101,19 @@
 
 结果包含路由器 HTTP 服务和 CPU 的处理开销，反映当前设备到路由器的实际传输能力；不能当作端口标称速率或宽带速度。测速时请保持页面在前台，并暂停其他传输。
 
+### 远程开机（LuCI「服务 → 远程开机」）
+
+路由器没有公网 IP 也能远程开电脑：路由器主动连到巴法云（bemfa.com，国内免费物联网平台）并订阅主题。手机在巴法云 App、微信小程序或米家（小爱同学：「打开电脑」）里向主题发 `on`，路由器收到后用 `etherwake` 向 LAN 广播网络唤醒魔术包。
+
+- **只有出站连接**：一条到 `bemfa.com:8344` 的 TCP 长连接，30 秒心跳，断网时指数退避（最长 2 分钟），不开端口、不改防火墙
+- **防误开机**：只认 `on`；订阅不拉历史消息，断线重连不会补触发；同一台电脑 5 秒内的重复指令只执行一次
+- 最多 8 台电脑（每台一个主题，以 `001` 结尾可接入米家）；每行有「立即唤醒」按钮，可以不经云端先在本地测试
+- **米家接入**：米家 App 绑定「巴法」后电脑显示为插座，可点开关或对小爱同学说「打开电脑」。路由器每 30 秒用 ARP 探测电脑是否开机（不受 Windows 防火墙影响），把真实状态写回巴法云，米家里的开关状态跟着电脑走；「关闭」指令不会关机
+- 电脑需**网线连接**路由器，并在 BIOS 和网卡里开启网络唤醒、关闭 Windows 快速启动
+- 默认关闭；私钥存 `/etc/config/remote-wol`（0600），状态在 `/tmp/remote-wol/status.json`
+
+设置步骤、小爱同学接入和排查见 [远程开机说明](docs/remote-wol.md)。
+
 ### 刻意不做的（及理由）
 
 - **不封 DoH**：走 443/TCP 与正常流量无法区分，误伤太大；QUIC 已封，
@@ -109,7 +124,7 @@
 ## 使用方法
 
 1. **构建**：本仓库已配好 Actions。进 **Actions → Build RM AC2100 OpenWrt
-   firmware → Run workflow**，默认参数（24.10.2 + LuCI + Argon 主题 + 简体中文 + v2.12.0）直接 Run，
+   firmware → Run workflow**，默认参数（24.10.2 + LuCI + Argon 主题 + 简体中文 + v2.13.0）直接 Run，
    约 3-5 分钟出包。可调输入：
    - `openwrt_version`：OpenWrt 底包版本
    - `include_luci`：是否带 LuCI（false = 纯 CLI，省内存）
@@ -141,7 +156,7 @@
 ## 首次进系统检查清单
 
 ```
-cat /etc/campus-fix-version        # 应显示 2.12.0
+cat /etc/campus-fix-version        # 应显示 2.13.0
 nft list chain inet fw4 campus_ttl_postrouting     # counter 在涨 = TTL 归一生效
 nft list chain inet fw4 campus_quic_block          # drop 在涨 = 有客户端试图 QUIC
 nft list chain inet fw4 campus_leak_block          # 发现协议封锁生效
@@ -205,8 +220,12 @@ files/
 ├── etc/config/lan-transfer          # 邻传开关与端口
 ├── usr/share/lan-transfer/          # 页面（www/）、共享 API（api.uc）、HTTP（transfer.uc）、STUN（stun.uc）
 ├── usr/share/luci/menu.d/ usr/share/rpcd/acl.d/ www/luci-static/resources/view/  # 邻传 LuCI 设置页
+├── etc/init.d/remote-wol            # 远程开机：校验配置后常驻巴法云长连接（procd）
+├── etc/config/remote-wol            # 远程开机：巴法云私钥与电脑列表（默认关闭）
+├── usr/share/remote-wol/            # 巴法云客户端（bemfa.uc）、魔术包发送脚本（wake）
 └── etc/uci-defaults/
     ├── 89-campus-fw4guard           # fw4 规则集自检：加载失败自动隔离 drop-in（保 LAN 永不死）
+    ├── 90-remote-wol                # 远程开机首刷：配置权限并注册服务
     ├── 92-lan-transfer              # 邻传首刷：注册并当场启动服务
     ├── 93-campus-auth               # 自动认证 daemon + LuCI 认证页 + rpcd 后端（v2.10 浏览器会话形态）
     ├── 94-campus-luci-i18n          # LuCI 默认简体中文
@@ -265,9 +284,12 @@ files/
 | v2.11.1 | 取消邻传按设备设置的 512 MiB / 1 GiB / 2 GiB 文件大小上限；实际接收能力仍受浏览器临时存储与设备剩余空间约束。路由器中转采用两块并行上传，并在输出下载正文前释放共享状态锁，减少上传、下载和设备发现互相排队；扩展分块序号范围，修正 ZIP32 边界判断。后端与浏览器端到端增加慢下载、乱序上传、丢失应答重试、取消及 5 GiB 文件元数据测试。尚未在 RM2100 真机测量传输速度。 |
 
 | v2.12.0 | 新增当前设备与路由器之间的内网测速：下载、上传与 HTTP 往返延迟；LuCI「服务 → 内网测速」和邻传右上角入口；3 / 5 / 10 / 15 秒可选、预热与停止、实际收到/确认的字节计数；仅 LAN 同源短请求，64 KiB 流式处理且不写入存储。保留原有邻传文件/文字互传功能，修复中转取消信令晚于分块清理到达时误显示失败的竞态；包含增量安装包、原生 ucode 与真实浏览器测试及镜像内容/权限核验。 |
+| v2.13.0 | 新增远程开机：路由器无公网 IP 时主动连巴法云 TCP 长连接订阅主题，收到 `on` 用 etherwake 向 LAN 广播魔术包；支持巴法云 App/小程序与米家（小爱同学「打开电脑」），最多 8 台电脑；米家状态同步：每 30 秒 ARP 探测电脑是否在线，经 `/up` 把真实开关状态写回云端（指令后 3 分钟宽限期）；订阅不拉历史消息防误开机、5 秒去重、心跳/超时/指数退避重连；LuCI「服务 → 远程开机」含本地「立即唤醒」与运行状态，ACL 只放行唤醒脚本；新增 etherwake 包。邻传中转改为常驻 ucode HTTP 服务（缺 socket 时回退 CGI）。init/唤醒脚本 shell 实跑，守护进程在 CI 原生 ucode 对假巴法云服务器测试；尚未在真机与真实巴法云服务上验证。 |
 
 ## 源码回归验证
 
 运行 `python3 tests/test_review_fixes.py`，需要 Python 3.10+、Node.js、curl，以及 BusyBox ash 或 dash。Windows 可使用 Git for Windows。测试使用临时目录及本机 HTTP 服务，不连接校园网；RPC 参数测试使用 Node.js 兼容层；CI 另以固件同版本 ucode 原生执行登录、下线和 MAC 生成冒烟测试。尚未进行真机认证验证。
 
 邻传：`python3 tests/test_lan_transfer.py` 跑后端、二维码、启动脚本、STUN 与文件卫生测试；`python3 tests/test_lan_transfer_daemon.py` 覆盖常驻 HTTP 的真实 TCP、背压及内存配额；浏览器端到端测试见 [docs/lan-transfer.md](docs/lan-transfer.md#验证)。CI 在原生 ucode、常驻 HTTP 和 CGI 回退入口上运行同一组浏览器测试。2026-10-12 已在 RM2100 真机验证常驻中转，三轮 32 MiB 对比的速度中位数从 4.17 MB/s 提升至 6.96 MB/s（约 67%）；尚未实测多台物理 Wi-Fi 设备组合。
+
+远程开机：`python3 tests/test_remote_wol.py` 用 ash/dash 实跑 init 与唤醒脚本；CI 另用原生 ucode 对着本机假巴法云服务器跑真实 TCP，覆盖订阅、指令过滤、心跳、重连与超时。尚未在真机和真实巴法云服务上验证，见 [docs/remote-wol.md](docs/remote-wol.md#验证)。

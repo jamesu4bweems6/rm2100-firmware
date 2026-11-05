@@ -1,0 +1,4 @@
+{
+	"config": "remote-wol",
+	"init": "remote-wol"
+}

@@ -1,0 +1,11 @@
+#!/bin/sh
+# 远程开机首刷：补权限、注册服务。默认关闭，在 LuCI「服务 → 远程开机」填好巴法云私钥和电脑后启用。
+[ -f /etc/config/remote-wol ] || printf "config remote-wol 'main'\n\toption enabled '0'\n\toption uid ''\n\toption server 'bemfa.com'\n\toption port '8344'\n\toption sync_state '1'\n" > /etc/config/remote-wol
+# 私钥存在这里，只允许 root 读
+chmod 0600 /etc/config/remote-wol
+chmod 0755 /etc/init.d/remote-wol /usr/share/remote-wol/bemfa.uc /usr/share/remote-wol/wake
+/etc/init.d/remote-wol enable
+# S10 阶段生成的 S96 软链赶不上本次开机，当场 start 一次；未启用时 start_service 直接返回
+/etc/init.d/remote-wol start 2>/dev/null
+rm -f /tmp/luci-indexcache* /tmp/luci-modulecache/* 2>/dev/null
+exit 0

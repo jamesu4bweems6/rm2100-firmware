@@ -1,0 +1,80 @@
+#!/bin/sh /etc/rc.common
+# 远程开机：路由器主动连巴法云 TCP 长连接（无需公网 IP），收到 on 指令就向 LAN 发魔术包。
+# 只有出站连接，不开放任何端口、不加防火墙规则。
+START=96
+STOP=10
+USE_PROCD=1
+
+DAEMON=/usr/share/remote-wol/bemfa.uc
+STATUS=/tmp/remote-wol/status.json
+HOSTS=
+TOPICS=' '
+COUNT=0
+
+add_host() {
+	local cfg="$1" enabled mac topic H='[0-9A-F][0-9A-F]'
+
+	config_get_bool enabled "$cfg" enabled 1
+	config_get mac "$cfg" mac
+	config_get topic "$cfg" topic
+	[ "$enabled" = 1 ] || return 0
+	mac=$(printf '%s' "$mac" | tr 'abcdef-' 'ABCDEF:')
+	case "$mac" in
+		$H:$H:$H:$H:$H:$H) ;;
+		*) logger -t remote-wol "跳过 $cfg：MAC 地址无效"; return 0 ;;
+	esac
+	case "$topic" in
+		''|*[!A-Za-z0-9]*) logger -t remote-wol "跳过 $cfg：主题只能用字母和数字"; return 0 ;;
+	esac
+	[ "${#topic}" -le 64 ] || { logger -t remote-wol "跳过 $cfg：主题过长"; return 0; }
+	case "$TOPICS" in
+		*" $topic "*) logger -t remote-wol "跳过 $cfg：主题 $topic 重复"; return 0 ;;
+	esac
+	# 巴法云单次订阅最多 8 个主题
+	[ "$COUNT" -lt 8 ] || { logger -t remote-wol "跳过 $cfg：最多 8 台电脑"; return 0; }
+	TOPICS="$TOPICS$topic "
+	COUNT=$((COUNT + 1))
+	HOSTS="$HOSTS $topic=$mac"
+}
+
+start_service() {
+	local enabled uid server port sync
+
+	config_load remote-wol
+	config_get_bool enabled main enabled 0
+	config_get uid main uid
+	config_get server main server bemfa.com
+	config_get port main port 8344
+	# 定时探测电脑是否在线，把真实开关状态写回巴法云，米家里显示才准
+	config_get_bool sync main sync_state 1
+	[ "$enabled" = 1 ] || return 0
+	case "$uid" in
+		''|*[!A-Za-z0-9]*) logger -t remote-wol "未启动：巴法云私钥为空或含非法字符"; return 0 ;;
+	esac
+	[ "${#uid}" -le 64 ] || { logger -t remote-wol "未启动：巴法云私钥过长"; return 0; }
+	case "$server" in
+		''|*[!A-Za-z0-9.-]*) server=bemfa.com ;;
+	esac
+	case "$port" in
+		''|*[!0-9]*) port=8344 ;;
+	esac
+	[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || port=8344
+
+	config_foreach add_host host
+	[ -n "$HOSTS" ] || { logger -t remote-wol "未启动：没有配置有效的电脑"; return 0; }
+
+	procd_open_instance bemfa
+	# HOSTS 已校验为「字母数字=大写 MAC」，按空格拆成多个参数正是想要的效果
+	procd_set_param command /usr/bin/ucode "$DAEMON" "$server" "$port" "$uid" "$sync" $HOSTS
+	procd_set_param respawn
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+stop_service() {
+	rm -f "$STATUS" "$STATUS.tmp"
+}
+
+service_triggers() {
+	procd_add_reload_trigger remote-wol
+}

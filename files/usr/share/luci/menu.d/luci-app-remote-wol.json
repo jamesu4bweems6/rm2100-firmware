@@ -1,0 +1,14 @@
+{
+	"admin/services/remote-wol": {
+		"title": "远程开机",
+		"order": 92,
+		"action": {
+			"type": "view",
+			"path": "remote-wol"
+		},
+		"depends": {
+			"acl": [ "luci-app-remote-wol" ],
+			"uci": { "remote-wol": true }
+		}
+	}
+}

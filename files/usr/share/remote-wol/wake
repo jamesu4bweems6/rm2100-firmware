@@ -1,0 +1,19 @@
+#!/bin/sh
+# 远程开机：向 LAN 口二层广播魔术包。用法：wake <MAC>
+# 巴法云守护进程和 LuCI「立即唤醒」按钮共用这一个入口，ACL 只放行它，不放行任意命令。
+mac=$(printf '%s' "$1" | tr 'abcdef-' 'ABCDEF:')
+H='[0-9A-F][0-9A-F]'
+case "$mac" in
+	$H:$H:$H:$H:$H:$H) ;;
+	*) echo "MAC 地址无效：$1" >&2; exit 2 ;;
+esac
+
+dev=
+if [ -r /lib/functions/network.sh ]; then
+	. /lib/functions/network.sh
+	network_get_device dev lan
+fi
+[ -n "$dev" ] || dev=br-lan
+
+# -b：目的地址用 ff:ff:ff:ff:ff:ff。电脑睡眠后交换芯片早已忘了它的 MAC，广播才能保证送达。
+exec /usr/bin/etherwake -b -i "$dev" "$mac"

@@ -1,0 +1,21 @@
+{
+	"luci-app-remote-wol": {
+		"description": "Remote wake-on-LAN via Bemfa cloud",
+		"read": {
+			"file": {
+				"/tmp/remote-wol/status.json": [ "read" ]
+			},
+			"ubus": {
+				"luci-rpc": [ "getHostHints" ],
+				"service": [ "list" ]
+			},
+			"uci": [ "remote-wol" ]
+		},
+		"write": {
+			"file": {
+				"/usr/share/remote-wol/wake *": [ "exec" ]
+			},
+			"uci": [ "remote-wol" ]
+		}
+	}
+}
