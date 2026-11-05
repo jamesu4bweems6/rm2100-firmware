@@ -89,7 +89,7 @@
 - **打开即用**：同一路由器下的设备用浏览器打开 `http://路由器LAN地址:8080/`，自动出现在彼此的「附近的设备」里（随机名字，可改名）。电脑上点「邀请设备」显示二维码，手机扫码即可打开
 - **发文件 / 发文字**：点设备卡片上的按钮或把文件拖上去；对方确认后开始传输，双方都能看到进度、速度、剩余时间，随时可取消。收到的多个文件可「全部保存」或「打包 ZIP」
 - **直连优先，中转兜底**：优先 WebRTC 在设备之间直传（加密，不占路由器 CPU）；路由器 LAN 口上的内网 STUN 应答器帮浏览器拿到真实内网地址，解决部分安卓 / Windows 解析不了 `.local` 地址导致连不上的问题。浏览器不支持 WebRTC 或 9 秒内连不通（如 AP 隔离）时自动改走路由器分块中转（最多占 12 MiB 内存）
-- **不碰网络面**：独立的 uhttpd 实例只绑定 LAN 口 IPv4，不改 LuCI 的 uhttpd、不加任何 nftables 规则（v2.7.0 事故的教训）；状态只放内存盘，重启即清空
+- **内网服务**：独立的常驻 HTTP 服务只绑定 LAN 口 IPv4，缺少 socket 模块时回退到 uhttpd；会话与信令只放内存盘，中转块留在进程内存中，重启需重新发送；不改 LuCI 的 uhttpd 和网络规则
 - **文件大小**：v2.11.1 不设固定接收上限，实际容量取决于浏览器和设备剩余空间；ZIP 打包使用 ZIP32，约 4 GiB 以上请逐个保存。不支持断点续传。微信 / QQ 内打开时会提示改用系统浏览器
 - LuCI 页面可开关功能、改端口；命令行：`uci set lan-transfer.main.enabled='0'; uci commit lan-transfer`
 
@@ -201,9 +201,9 @@ files/
 │   ├── 20-campus-egress-hygiene.nft # DoT/发现协议/ICMP-ts 封锁 + NTP 重定向 + 可选开关
 │   ├── 25-campus-mss.nft           # MSS clamp（v2.8.0 灰度回归，fw4guard 兜底）
 │   └── 30-campus-synrate.nft       # 聚合 LAN SYN 速率上限（v2.9.0 单条灰度，stateless limit）
-├── etc/init.d/lan-transfer          # 邻传：独立 uhttpd（仅 LAN IPv4）+ 内网 STUN 应答器
+├── etc/init.d/lan-transfer          # 邻传：常驻 HTTP（仅 LAN IPv4）+ 测速 + 内网 STUN；缺少 socket 时回退 CGI
 ├── etc/config/lan-transfer          # 邻传开关与端口
-├── usr/share/lan-transfer/          # 邻传页面（www/）、CGI 后端（www/cgi-bin/api）、STUN（stun.uc）
+├── usr/share/lan-transfer/          # 页面（www/）、共享 API（api.uc）、HTTP（transfer.uc）、STUN（stun.uc）
 ├── usr/share/luci/menu.d/ usr/share/rpcd/acl.d/ www/luci-static/resources/view/  # 邻传 LuCI 设置页
 └── etc/uci-defaults/
     ├── 89-campus-fw4guard           # fw4 规则集自检：加载失败自动隔离 drop-in（保 LAN 永不死）
@@ -270,4 +270,4 @@ files/
 
 运行 `python3 tests/test_review_fixes.py`，需要 Python 3.10+、Node.js、curl，以及 BusyBox ash 或 dash。Windows 可使用 Git for Windows。测试使用临时目录及本机 HTTP 服务，不连接校园网；RPC 参数测试使用 Node.js 兼容层；CI 另以固件同版本 ucode 原生执行登录、下线和 MAC 生成冒烟测试。尚未进行真机认证验证。
 
-邻传：`python3 tests/test_lan_transfer.py` 跑后端、二维码、启动脚本、STUN 与文件卫生测试；浏览器端到端测试见 [docs/lan-transfer.md](docs/lan-transfer.md#验证)。CI 在原生 ucode、按固件参数启动的真实 uhttpd 与 STUN 应答器上运行同一组浏览器测试。尚未在 RM2100 真机上验证。
+邻传：`python3 tests/test_lan_transfer.py` 跑后端、二维码、启动脚本、STUN 与文件卫生测试；`python3 tests/test_lan_transfer_daemon.py` 覆盖常驻 HTTP 的真实 TCP、背压及内存配额；浏览器端到端测试见 [docs/lan-transfer.md](docs/lan-transfer.md#验证)。CI 在原生 ucode、常驻 HTTP 和 CGI 回退入口上运行同一组浏览器测试。2026-10-12 已在 RM2100 真机验证常驻中转，三轮 32 MiB 对比的速度中位数从 4.17 MB/s 提升至 6.96 MB/s（约 67%）；尚未实测多台物理 Wi-Fi 设备组合。

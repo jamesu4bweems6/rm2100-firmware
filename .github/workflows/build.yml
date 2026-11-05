@@ -77,6 +77,7 @@ jobs:
           python3 tests/test_lan_transfer.py
           python3 tests/test_lan_speed.py
           python3 tests/test_lan_speed_daemon.py
+          python3 tests/test_lan_transfer_daemon.py
 
       - name: Test LAN transfer on real uhttpd, native ucode and STUN in real browsers
         run: |
@@ -92,7 +93,7 @@ jobs:
           STUN_PID=$!
           /usr/bin/ucode /tmp/lt/speed.uc "$LAN_IP" 8765 /tmp/lt/state /tmp/lt/www > /tmp/lt-speed.log 2>&1 &
           SPEED_PID=$!
-          trap 'kill "$UHTTPD_PID" "$STUN_PID" "$SPEED_PID" 2>/dev/null || true; cat /tmp/lt-uhttpd.log /tmp/lt-stun.log /tmp/lt-speed.log' EXIT
+          trap 'kill "$UHTTPD_PID" "$STUN_PID" "$SPEED_PID" 2>/dev/null || true; cat /tmp/lt-uhttpd.log /tmp/lt-stun.log /tmp/lt-speed.log; cat /tmp/lt-http.log 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do
             curl -fsS "http://$LAN_IP:8765/" -o /dev/null && break
             sleep 1
@@ -102,6 +103,22 @@ jobs:
             LAN_TRANSFER_SCREENSHOTS=/tmp/lt-shots node tests/test_lan_transfer_browser.cjs
           NODE_PATH=/tmp/lt-browser/node_modules LAN_TRANSFER_URL="http://$LAN_IP:8765/" \
             LAN_TRANSFER_SCREENSHOTS=/tmp/lt-shots node tests/test_lan_speed_browser.cjs
+          # 再跑固件默认的常驻中转入口，CGI 回退和常驻服务使用同一组浏览器回归。
+          kill "$UHTTPD_PID"
+          wait "$UHTTPD_PID" || true
+          mkdir -p /tmp/lt/http-state
+          cp /tmp/lt/state/stun.json /tmp/lt/state/speed.json /tmp/lt/http-state/
+          /usr/bin/ucode /tmp/lt/transfer.uc "$LAN_IP" 8765 /tmp/lt/http-state /tmp/lt/www > /tmp/lt-http.log 2>&1 &
+          UHTTPD_PID=$!
+          for attempt in $(seq 1 30); do
+            curl -fsS "http://$LAN_IP:8765/" -o /dev/null && break
+            sleep 1
+          done
+          python3 tests/test_lan_transfer.py --smoke "http://$LAN_IP:8765"
+          NODE_PATH=/tmp/lt-browser/node_modules LAN_TRANSFER_URL="http://$LAN_IP:8765/" LAN_TRANSFER_STUN=1 \
+            node tests/test_lan_transfer_browser.cjs
+          NODE_PATH=/tmp/lt-browser/node_modules LAN_TRANSFER_URL="http://$LAN_IP:8765/" \
+            node tests/test_lan_speed_browser.cjs
 
       - name: Upload LAN transfer screenshots
         if: always()
@@ -160,7 +177,7 @@ jobs:
           mkdir -p ib/files
           cp -r files/* ib/files/
           chmod 0755 ib/files/etc/init.d/lan-transfer ib/files/etc/uci-defaults/92-lan-transfer \
-            ib/files/usr/share/lan-transfer/stun.uc ib/files/usr/share/lan-transfer/speed.uc ib/files/usr/share/lan-transfer/www/cgi-bin/api \
+            ib/files/usr/share/lan-transfer/stun.uc ib/files/usr/share/lan-transfer/speed.uc ib/files/usr/share/lan-transfer/transfer.uc ib/files/usr/share/lan-transfer/www/cgi-bin/api \
             ib/files/usr/share/lan-transfer/www/cgi-bin/speed
           # stamp the firmware version into the overlay
           FWV="${{ github.event.inputs.fw_version || '2.12.0' }}"
@@ -219,7 +236,7 @@ jobs:
           # 解压（quickauth 应答是 gzip）。带 zlib（LIBCURL_ZLIB default y）
           # 与 ca-bundle（已在镜像里），增量约 +400KB。
           PKGS="$PKGS kmod-ipt-nat ip6tables-nft iptables-nft curl"
-          # 邻传：独立 uhttpd + ucode CGI，include_luci=false 时也能用；socket 模块给内网 STUN 应答器
+          # 邻传：常驻 ucode HTTP + CGI 回退；socket 模块同时用于 HTTP、测速与 STUN。
           PKGS="$PKGS uhttpd ucode ucode-mod-fs ucode-mod-socket"
           make image \
             PROFILE="$PROFILE" \
@@ -256,6 +273,7 @@ jobs:
           root=$(find "$work" -type f -name root | head -n1)
           for f in etc/init.d/lan-transfer etc/config/lan-transfer etc/uci-defaults/92-lan-transfer \
                    usr/share/lan-transfer/stun.uc usr/share/lan-transfer/speed.uc usr/share/lan-transfer/www/index.html usr/share/lan-transfer/www/app.js \
+                   usr/share/lan-transfer/api.uc usr/share/lan-transfer/transfer.uc \
                    usr/share/lan-transfer/www/qr.js usr/share/lan-transfer/www/style.css usr/share/lan-transfer/www/cgi-bin/api \
                    usr/share/lan-transfer/www/speed.html usr/share/lan-transfer/www/speed.js usr/share/lan-transfer/www/cgi-bin/speed \
                    usr/share/luci/menu.d/luci-app-lan-transfer.json usr/share/rpcd/acl.d/luci-app-lan-transfer.json \
@@ -264,7 +282,7 @@ jobs:
             cmp "$work/check" "$GITHUB_WORKSPACE/files/$f" || { echo "镜像内容与仓库不一致：$f" >&2; exit 1; }
           done
           unsquashfs -lls "$root" usr/lib/ucode/socket.so | grep -q 'socket\.so' || { echo "镜像缺少 socket.so" >&2; exit 1; }
-          unsquashfs -lls "$root" etc/init.d/lan-transfer usr/share/lan-transfer/stun.uc usr/share/lan-transfer/speed.uc usr/share/lan-transfer/www/cgi-bin/api \
+          unsquashfs -lls "$root" etc/init.d/lan-transfer usr/share/lan-transfer/stun.uc usr/share/lan-transfer/speed.uc usr/share/lan-transfer/transfer.uc usr/share/lan-transfer/www/cgi-bin/api \
             usr/share/lan-transfer/www/cgi-bin/speed \
             | awk '$1 ~ /^-/ { print; if ($1 !~ /^-rwx/) bad = 1 } END { exit bad }'
           echo "邻传文件、权限与依赖包已在镜像内核对"
